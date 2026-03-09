@@ -1,0 +1,114 @@
+{
+    "Logs": [
+        "--------------------------------------------",
+        "开始AES集成设计...",
+        "--------------------------------------------",
+        "开始'浮头法兰'集成设计...",
+        "Error：浮头法兰设计压力不存在",
+        "--------------------------------------------",
+        "开始'管箱圆筒'集成设计...",
+        "推荐厚度1：0",
+        "推荐厚度2：0",
+        "最终厚度：0",
+        "--------------------------------------------",
+        "开始'壳体圆筒'集成设计...",
+        "推荐厚度1：0",
+        "推荐厚度2：0",
+        "最终厚度：0",
+        "--------------------------------------------",
+        "开始'外头盖圆筒'集成设计...",
+        "推荐厚度1：0",
+        "推荐厚度2：0",
+        "最终厚度：0",
+        "--------------------------------------------",
+        "开始'外头盖封头'集成设计...",
+        "Error：BES集成设计计算错误，System.ArgumentOutOfRangeException 索引超出范围。必须为非负值并小于集合大小。\r\n参数名: index",
+        "Error：强度计算错误，System.ArgumentOutOfRangeException 索引超出范围。必须为非负值并小于集合大小。\r\n参数名: index"
+    ],
+    "DictOutDatas": {
+        "管箱圆筒": {
+            "IsSuccess": false,
+            "Datas": []
+        },
+        "管箱法兰": {
+            "IsSuccess": false,
+            "Datas": []
+        },
+        "管箱分程隔板": {
+            "IsSuccess": false,
+            "Datas": []
+        },
+        "壳体圆筒": {
+            "IsSuccess": false,
+            "Datas": []
+        },
+        "壳体法兰": {
+            "IsSuccess": false,
+            "Datas": []
+        },
+        "固定管板": {
+            "IsSuccess": false,
+            "Datas": []
+        },
+        "浮头管束": {
+            "IsSuccess": false,
+            "Datas": []
+        },
+        "外头盖封头": {
+            "IsSuccess": false,
+            "Datas": []
+        },
+        "鞍座": {
+            "IsSuccess": false,
+            "Datas": []
+        },
+        "外头盖侧法兰": {
+            "IsSuccess": false,
+            "Datas": []
+        },
+        "浮头法兰": {
+            "IsSuccess": false,
+            "Datas": null
+        },
+        "外头盖法兰": {
+            "IsSuccess": false,
+            "Datas": []
+        },
+        "外头盖圆筒": {
+            "IsSuccess": false,
+            "Datas": []
+        },
+        "管程入口接管": {
+            "IsSuccess": false,
+            "Datas": []
+        },
+        "管程出口接管": {
+            "IsSuccess": false,
+            "Datas": []
+        },
+        "壳程入口接管": {
+            "IsSuccess": false,
+            "Datas": []
+        },
+        "壳程出口接管": {
+            "IsSuccess": false,
+            "Datas": []
+        },
+        "排液口接管": {
+            "IsSuccess": false,
+            "Datas": []
+        },
+        "排气口接管": {
+            "IsSuccess": false,
+            "Datas": []
+        },
+        "管箱平盖": {
+            "IsSuccess": false,
+            "Datas": []
+        },
+        "头盖法兰": {
+            "IsSuccess": false,
+            "Datas": []
+        }
+    }
+}

@@ -1,0 +1,23 @@
+2025-12-01 15:03:17,420 [INFO] [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on http://127.0.0.1:5000
+2025-12-01 15:03:17,426 [INFO] [33mPress CTRL+C to quit[0m
+2025-12-01 15:03:17,829 [INFO] 127.0.0.1 - - [01/Dec/2025 15:03:17] "GET / HTTP/1.1" 200 -
+2025-12-01 15:46:25,710 [INFO] 127.0.0.1 - - [01/Dec/2025 15:46:25] "GET / HTTP/1.1" 200 -
+2026-02-21 16:21:06,335 [INFO] [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on http://127.0.0.1:5000
+2026-02-21 16:21:06,336 [INFO] [33mPress CTRL+C to quit[0m
+2026-02-21 16:21:06,729 [INFO] 127.0.0.1 - - [21/Feb/2026 16:21:06] "GET / HTTP/1.1" 200 -
+2026-02-21 16:21:07,612 [INFO] 127.0.0.1 - - [21/Feb/2026 16:21:07] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
+2026-02-21 16:41:25,915 [INFO] [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on http://127.0.0.1:5000
+2026-02-21 16:41:25,916 [INFO] [33mPress CTRL+C to quit[0m
+2026-02-21 16:41:26,285 [INFO] 127.0.0.1 - - [21/Feb/2026 16:41:26] "GET / HTTP/1.1" 200 -
+2026-02-21 16:54:48,560 [INFO] [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on http://127.0.0.1:5000
+2026-02-21 16:54:48,560 [INFO] [33mPress CTRL+C to quit[0m
+2026-02-21 16:54:48,933 [INFO] 127.0.0.1 - - [21/Feb/2026 16:54:48] "GET / HTTP/1.1" 200 -
+2026-02-26 14:29:06,191 [INFO] [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on http://127.0.0.1:5000
+2026-02-26 14:29:06,191 [INFO] [33mPress CTRL+C to quit[0m
+2026-02-26 14:29:07,891 [INFO] 127.0.0.1 - - [26/Feb/2026 14:29:07] "GET / HTTP/1.1" 200 -
+2026-02-26 14:29:08,396 [INFO] 127.0.0.1 - - [26/Feb/2026 14:29:08] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
