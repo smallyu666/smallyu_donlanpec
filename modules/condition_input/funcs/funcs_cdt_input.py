@@ -1,13 +1,17 @@
 from openpyxl.styles import Alignment
 
 from modules.cailiaodingyi.funcs.funcs_pdf_change import update_element_name_data, \
-    get_design_params_by_product_id, update_guankou_param_flex_db, query_guankou_affiliation, resolve_gasket_dimensions, query_guankou_codes,\
-    invalidate_caches_for_product
+    get_design_params_by_product_id, update_guankou_param_flex_db, query_guankou_affiliation, resolve_gasket_dimensions, query_guankou_codes, \
+    invalidate_caches_for_product, update_guankou_corrosion_to_category_table, update_guankou_opening_weld_joint_coeff_to_category_table, \
+    sync_yanban_height_if_exceeds_shell_dn, \
+    db_config_1 as design_db_config_1
 from modules.cailiaodingyi.controllers.check_dianpian import clear_all_pn_user_input_for_product, force_recompute_and_update_pn
 from modules.cailiaodingyi.funcs.funcs_pdf_input import query_all_guankou_categories
 # from modules.cailiaodingyi.funcs.funcs_pdf_change import update_element_name_data, \
 #     get_design_params_by_product_id, update_guankou_param_flex_db, query_guankou_affiliation, resolve_gasket_dimensions
 from modules.condition_input.funcs.db_cnt import get_connection
+from typing import Dict, Tuple
+import pymysql
 from PyQt5.QtWidgets import (QTableWidgetItem, QTableWidget, QHeaderView, QWidget,
                              QMessageBox, QUndoStack, QFileDialog, QComboBox, QStyledItemDelegate, QShortcut,
                              QTabWidget, QStackedWidget)
@@ -28,6 +32,41 @@ from modules.condition_input.funcs.funcs_def_check import check_dn, check_work_p
     check_in_out_pressure_gap, check_trail_stand_pressure_medium_density, check_insulation_layer_thickness, \
     check_insulation_material_density, check_def_trail_stand_pressure_lying, check_def_trail_stand_pressure_stand, \
     check_trail_stand_pressure_type, check_pressure_test_temp, check_avg_tube_metal_temp, check_avg_shell_metal_temp
+
+# ============================================================================
+# “所属元件开孔处焊接接头系数”——手动标志（内存态）
+# - key: (product_id, category_label)
+# - value: True/False  表示该分类是否曾被用户在元件定义界面手动修改过
+#
+# 注意：仅在当前进程有效（不落库）。
+# ============================================================================
+_manual_opening_k_flags: Dict[Tuple[str, str], bool] = {}
+
+
+def set_manual_flag(product_id: str, category_label: str, value: bool) -> None:
+    if not product_id or not category_label:
+        return
+    key = (str(product_id), str(category_label))
+    if value:
+        _manual_opening_k_flags[key] = True
+    else:
+        _manual_opening_k_flags.pop(key, None)
+
+
+def get_manual_flag(product_id: str, category_label: str) -> bool:
+    if not product_id or not category_label:
+        return False
+    key = (str(product_id), str(category_label))
+    return bool(_manual_opening_k_flags.get(key, False))
+
+
+def clear_manual_flags_for_product(product_id: str) -> None:
+    if not product_id:
+        return
+    pid = str(product_id)
+    keys_to_del = [k for k in _manual_opening_k_flags if k[0] == pid]
+    for k in keys_to_del:
+        _manual_opening_k_flags.pop(k, None)
 
 #数据库连接
 db_config_1 = {
@@ -1829,9 +1868,13 @@ def sync_design_params_to_element_params(product_id):
         update_element_name_data(product_id, "浮动管板", "壳程侧腐蚀裕量", str(shell_ca))
         update_element_name_data(product_id, "球冠形封头", "壳程侧腐蚀裕量", str(shell_ca))
 
+    try:
+        sync_yanban_height_if_exceeds_shell_dn(product_id)
+    except Exception as e:
+        print(f"[警告] 堰板高度随壳程公称直径同步失败: {e}")
 
 
-def sync_corrosion_to_guankou_param(product_id, guankou_codes, category_label=None):
+def sync_corrosion_to_guankou_param(product_id, guankou_codes, category_label=None, overwrite_all_codes=False):
     """
     将条件输入（设计数据表）的腐蚀裕量同步到管口参数：
     - case1: 当管程/壳程腐蚀裕量数值相同 → 用该值填写管口3列默认值
@@ -1850,6 +1893,78 @@ def sync_corrosion_to_guankou_param(product_id, guankou_codes, category_label=No
         return
 
     print(f"[调试] tube_ca={tube_ca} ({type(tube_ca)}), shell_ca={shell_ca} ({type(shell_ca)})")
+
+    # 额外新增：把每个【管口代号】的接管腐蚀裕量单独写入 产品设计活动表_管口类别表
+    # - 不改变原有“接管腐蚀裕量(管口附加参数表)”的显示/写入逻辑
+    try:
+        # === 写入“产品设计活动表_管口类别表” ===
+        # overwrite_all_codes=True 时：忽略传入的 guankou_codes，按产品维度同步所有管口号
+        # （直接从 产品设计活动表_管口类别表 中读取该产品现有的所有管口代号，包括当前不挂在任何 Tab 下的管口）
+        # 否则：仅对当前传入的 guankou_codes 做增量/局部更新
+
+        # 1) 计算需要写入的管口号集合
+        target_codes = set()
+        if overwrite_all_codes:
+            conn_codes = None
+            try:
+                conn_codes = pymysql.connect(**design_db_config_1)
+                with conn_codes.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT DISTINCT 管口代号
+                        FROM 产品设计活动表_管口类别表
+                        WHERE 产品ID=%s
+                        """,
+                        (product_id,),
+                    )
+                    rows = cur.fetchall() or []
+                    for row in rows:
+                        # row 可能是 tuple 或单列
+                        code = row[0] if isinstance(row, (list, tuple)) else row
+                        c2 = (code or "").strip()
+                        if c2:
+                            target_codes.add(c2)
+            except Exception as e:
+                print(f"[警告] 查询产品{product_id}所有管口代号失败: {e}")
+            finally:
+                try:
+                    if conn_codes:
+                        conn_codes.close()
+                except Exception:
+                    pass
+        else:
+            if guankou_codes:
+                for c in guankou_codes:
+                    c2 = (c or "").strip()
+                    if c2:
+                        target_codes.add(c2)
+
+        if target_codes:
+            code_to_value = {}
+            # 若管壳相同：不必区分所属，直接同值写入每个管口
+            if tube_ca and shell_ca and str(tube_ca) == str(shell_ca):
+                for code in target_codes:
+                    code_to_value[code] = str(tube_ca)
+            else:
+                # 管壳不同：按管口所属写入对应值（取不到所属则留空）
+                for code in target_codes:
+                    a = query_guankou_affiliation(product_id, code)
+                    if a == "管程":
+                        code_to_value[code] = str(tube_ca) if tube_ca is not None and str(tube_ca).strip() != "" else ""
+                    elif a == "壳程":
+                        code_to_value[code] = str(shell_ca) if shell_ca is not None and str(shell_ca).strip() != "" else ""
+                    else:
+                        code_to_value[code] = ""
+
+            if code_to_value:
+                ret = update_guankou_corrosion_to_category_table(product_id, code_to_value)
+                print(
+                    f"[同步] 管口类别表.接管腐蚀裕量 更新 {ret.get('updated', 0)}/{ret.get('requested', 0)} "
+                    f"(overwrite_all_codes={overwrite_all_codes}, codes={sorted(target_codes)})"
+                )
+    except Exception as e:
+        # 兼容：字段未加/库异常时，不影响主流程
+        print(f"[警告] 同步到管口类别表.接管腐蚀裕量失败: {e}")
 
     # === case1: 管壳程腐蚀裕量相同 ===
     if tube_ca and shell_ca and str(tube_ca) == str(shell_ca):
@@ -1890,6 +2005,299 @@ def sync_corrosion_to_guankou_param(product_id, guankou_codes, category_label=No
         update_guankou_param_flex_db(product_id, "接管腐蚀裕量", "", tab_name=category_label)
         print("[case3] 没有管口号且腐蚀裕量不同，留空")
 
+
+def get_opening_weld_joint_default(product_id: str, category_label: str = None):
+    """
+    计算“所属元件开孔处焊接接头系数”的【默认值】（仅用于 UI 比对，不一定写入DB）：
+    - case1: 管程/壳程系数相同 → 返回该值；
+    - case2: 当前分类下的管口都属于管程/壳程 → 返回对应系数；
+    - case3: 混合 → 对当前分类下的每个管口，按所属取管程/壳程系数，再取最小值；
+    - 若条件输入缺少该参数，或无法计算，返回 None。
+    """
+    if not product_id:
+        return None
+
+    pmap = get_design_params_by_product_id(product_id)
+    tube_k = pmap.get("焊接接头系数*", {}).get("管程数值", "")
+    shell_k = pmap.get("焊接接头系数*", {}).get("壳程数值", "")
+
+    if not tube_k and not shell_k:
+        return None
+
+    def _to_float(x):
+        try:
+            if x is None:
+                return None
+            s = str(x).strip()
+            if not s:
+                return None
+            return float(s)
+        except Exception:
+            return None
+
+    t_val = _to_float(tube_k)
+    s_val = _to_float(shell_k)
+
+    # case1: 管壳相同
+    if t_val is not None and s_val is not None and abs(t_val - s_val) < 1e-9:
+        return t_val
+
+    if not category_label:
+        return None
+
+    # 当前分类下的管口号
+    try:
+        codes = query_guankou_codes(product_id, category_label) or []
+    except Exception:
+        codes = []
+
+    if not codes:
+        return None
+
+    affiliations = [query_guankou_affiliation(product_id, code) for code in codes]
+    pure_tube = all(a == "管程" for a in affiliations if a)
+    pure_shell = all(a == "壳程" for a in affiliations if a)
+
+    # case2: 纯管程/纯壳程
+    if pure_tube and t_val is not None:
+        return t_val
+    if pure_shell and s_val is not None:
+        return s_val
+
+    # case3: 混合 → 按所属取对应系数，再取最小值
+    vals = []
+    for code, a in zip(codes, affiliations):
+        if a == "管程" and t_val is not None:
+            vals.append(t_val)
+        elif a == "壳程" and s_val is not None:
+            vals.append(s_val)
+
+    if not vals:
+        return None
+    return min(vals)
+
+
+def sync_opening_weld_joint_coeff_to_guankou_param(
+    product_id,
+    guankou_codes,
+    category_label=None,
+    skip_category_sync=False,
+    force_reset_from_condition=False,
+):
+    """
+    将条件输入（设计数据表）的“焊接接头系数*”同步到管口参数：
+    - case1: 当管程/壳程系数相同 → 用该值填写管口默认值
+    - case2: 如果管口号都属于管程或壳程 → 用对应的系数值填写
+    - case3: 以上两种情况都不满足时 → 不填，保持为空
+
+    同时：把每个【管口代号】的值单独写入 产品设计活动表_管口类别表.所属元件开孔处焊接接头系数
+    """
+    # 1) 从条件输入获取焊接接头系数*
+    pmap = get_design_params_by_product_id(product_id)
+    tube_k = pmap.get("焊接接头系数*", {}).get("管程数值", "")
+    shell_k = pmap.get("焊接接头系数*", {}).get("壳程数值", "")
+
+    if not tube_k and not shell_k:
+        print("[跳过] 条件输入没有焊接接头系数*")
+        return
+
+    print(f"[调试] tube_k={tube_k} ({type(tube_k)}), shell_k={shell_k} ({type(shell_k)})")
+
+    # 2) 逐管口写入 管口类别表（不影响已满足“用户值>=默认值”的用户输入）
+    #    当 skip_category_sync=True 时，跳过此步骤（典型场景：用户在元件定义UI中手动修改了该参数，
+    #    datamanager 已经把用户值写回类别表，这里不再用条件输入的默认值覆盖）
+    #    当 force_reset_from_condition=True（从条件输入保存触发）时，视“焊接接头系数*”为新的主数据，
+    #    无条件按默认值覆盖类别表中对应管口号的值。
+    if not skip_category_sync:
+        try:
+            if guankou_codes:
+                # 仅在“类别表当前值为空或小于默认值”时，才用默认值覆盖；用户已输入且>=默认值的保留
+                code_to_value = {}
+
+                def _to_float_safe(x):
+                    try:
+                        if x is None:
+                            return None
+                        s = str(x).strip()
+                        if not s:
+                            return None
+                        return float(s)
+                    except Exception:
+                        return None
+
+                # 使用设计活动库连接读取当前类别表中的值
+                conn_cat = pymysql.connect(**design_db_config_1)
+                try:
+                    with conn_cat.cursor(pymysql.cursors.DictCursor) as c:
+                        for code in guankou_codes:
+                            c0 = (code or "").strip()
+                            if not c0:
+                                continue
+                            a = query_guankou_affiliation(product_id, c0)
+                            # 根据所属确定该管口的默认值
+                            if a == "管程":
+                                d_val = _to_float_safe(tube_k)
+                            elif a == "壳程":
+                                d_val = _to_float_safe(shell_k)
+                            else:
+                                d_val = None
+                            if d_val is None:
+                                continue
+
+                            if force_reset_from_condition:
+                                # 条件输入显式修改：无条件重写为新的默认值
+                                code_to_value[c0] = str(d_val)
+                            else:
+                                # 读取当前类别表中的用户值
+                                c.execute(
+                                    """
+                                    SELECT 所属元件开孔处焊接接头系数 AS v
+                                    FROM 产品设计活动表_管口类别表
+                                    WHERE 产品ID=%s AND 管口代号=%s
+                                    """,
+                                    (product_id, c0),
+                                )
+                                row = c.fetchone()
+                                cur_v = row.get("v") if row else None
+                                cur_f = _to_float_safe(cur_v)
+
+                                # 仅当当前值为空或小于默认值时，才更新为默认值
+                                if cur_f is None or cur_f < d_val:
+                                    code_to_value[c0] = str(d_val)
+
+                finally:
+                    conn_cat.close()
+
+                if code_to_value:
+                    ret = update_guankou_opening_weld_joint_coeff_to_category_table(product_id, code_to_value)
+                    print(f"[同步] 管口类别表.所属元件开孔处焊接接头系数 更新 {ret.get('updated', 0)}/{ret.get('requested', 0)}")
+        except Exception as e:
+            print(f"[警告] 同步到管口类别表.所属元件开孔处焊接接头系数失败: {e}")
+
+    # 3) 写入管口附加参数表（用于页面显示的默认值/联动，且遵守“用户值 >= 默认值”的约束）
+    param_name = "所属元件开孔处焊接接头系数"
+    # 仅在有分类标签时才考虑写入
+    if not category_label:
+        return
+
+    # 计算当前分类下的“默认值”
+    default_val = get_opening_weld_joint_default(product_id, category_label)
+    if default_val is None:
+        # 无法计算默认值 → 不强制覆盖已有用户值
+        return
+
+    # 判断当前分类是否为“混合场景”
+    affiliations = []
+    try:
+        affiliations = [query_guankou_affiliation(product_id, code) for code in (guankou_codes or [])]
+    except Exception:
+        affiliations = []
+    pure_tube = all(a == "管程" for a in affiliations if a)
+    pure_shell = all(a == "壳程" for a in affiliations if a)
+    mixed = not (pure_tube or pure_shell)
+
+    # 读取当前 DB 中该分类的参数值
+    conn = None
+    try:
+        # 注意：管口附加参数表在“产品设计活动库”中，这里必须使用设计活动库的连接配置
+        conn = pymysql.connect(**design_db_config_1)
+        with conn.cursor(pymysql.cursors.DictCursor) as cursor:
+            sql = """
+                SELECT 参数值
+                FROM 产品设计活动表_管口附加参数表
+                WHERE 产品ID = %s AND 参数名称 = %s AND 类别 = %s
+                LIMIT 1
+            """
+            cursor.execute(sql, (product_id, param_name, category_label))
+            row = cursor.fetchone()
+            cur_val = (row.get("参数值") if row else "") if row is not None else ""
+
+        # 辅助解析函数
+        def _to_float(x):
+            try:
+                if x is None:
+                    return None
+                s = str(x).strip()
+                if not s:
+                    return None
+                return float(s)
+            except Exception:
+                return None
+
+        cur_f = _to_float(cur_val)
+        # 解析管程/壳程默认值，便于识别“模板默认值”还是“用户输入值”
+        t_val = _to_float(tube_k)
+        s_val = _to_float(shell_k)
+
+        # case3：混合场景（本 tab 里既有管程又有壳程）
+        if mixed:
+            # ① DB 为空 → 说明当前只有默认逻辑，还没有用户输入，保持为空，仅在 UI 中用 default_val 做下限比较
+            if cur_val is None or str(cur_val).strip() == "":
+                print(f"[case3] 分类 {category_label} 为混合场景，DB 为空，仅在UI中使用默认值 {default_val}")
+                return
+
+            # ② DB 中的值等于某一侧的条件输入默认值（0.8 或 0.85）
+            #    仅在“非用户主动修改调用（skip_category_sync=False）”时，才把它视作“模板默认值”并清空。
+            #    若是用户在元件定义UI中手动输入 0.8 / 0.85 触发的调用（skip_category_sync=True），
+            #    则应视作用户值，后续走“提升/保留”分支，不再清空。
+            if not skip_category_sync:
+                if (
+                    cur_f is not None
+                    and (
+                        (t_val is not None and abs(cur_f - t_val) < 1e-9)
+                        or (s_val is not None and abs(cur_f - s_val) < 1e-9)
+                    )
+                ):
+                    update_guankou_param_flex_db(product_id, param_name, "", tab_name=category_label)
+                    print(f"[case3] 分类 {category_label} 混合场景且当前值为模板默认值 {cur_val}，清空DB，仅在UI中使用默认值 {default_val}")
+                    return
+
+            # ③ 其余情况视为“用户输入值”：
+            #    - 一般调用：若 < default_val，则提升到 default_val；否则保留用户值
+            #    - 条件输入保存触发（force_reset_from_condition=True）：无论当前值如何，都重写为 default_val，
+            #      且把该分类的“手动标志”重置为 False（回到条件输入主导状态）
+            if force_reset_from_condition:
+                update_guankou_param_flex_db(product_id, param_name, str(default_val), tab_name=category_label)
+                set_manual_flag(product_id, category_label, False)
+                print(f"[case3-条件输入覆盖] 分类 {category_label} 由条件输入强制写入默认值 {default_val}，手动标志清零")
+            else:
+                if cur_f is None or cur_f < float(default_val):
+                    update_guankou_param_flex_db(product_id, param_name, str(default_val), tab_name=category_label)
+                    print(f"[case3-提升] 分类 {category_label} 原值={cur_val} < 默认值={default_val}，提升为默认值")
+                else:
+                    print(f"[case3-保留] 分类 {category_label} 原值={cur_val} >= 默认值={default_val}，保留用户值")
+            return
+
+        # 非混合场景：
+        # force_reset_from_condition=True（条件输入保存触发）：
+        #   无论当前是否有值，直接写入新的默认值（条件输入视为主数据），并清除该分类的“手动标志”
+        if force_reset_from_condition:
+            update_guankou_param_flex_db(product_id, param_name, str(default_val), tab_name=category_label)
+            set_manual_flag(product_id, category_label, False)
+            print(f"[条件输入覆盖] 分类 {category_label} 由条件输入强制写入默认值 {default_val}，手动标志清零")
+        else:
+            # 若 DB 中还没有值，首次写入默认值
+            if cur_val is None or str(cur_val).strip() == "":
+                update_guankou_param_flex_db(product_id, param_name, str(default_val), tab_name=category_label)
+                print(f"[默认写入] 分类 {category_label} 首次写入默认值 {default_val}")
+                return
+
+            # 若已有用户值：当其 < 默认值 时，用默认值覆盖；否则保留用户值
+            if cur_f is None or cur_f < float(default_val):
+                update_guankou_param_flex_db(product_id, param_name, str(default_val), tab_name=category_label)
+                print(f"[提升] 分类 {category_label} 原值={cur_val} < 默认值={default_val}，提升为默认值")
+            else:
+                print(f"[保留] 分类 {category_label} 原值={cur_val} >= 默认值={default_val}，保留用户值")
+    except Exception as e:
+        print(f"[警告] 同步所属元件开孔处焊接接头系数到管口附加参数表失败: {e}")
+    finally:
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+
+
 def save_all_tables(viewer, product_id):
     """
     保存所有表格数据（标准、设计、通用、涂漆、无损检测）至数据库
@@ -1920,12 +2328,23 @@ def save_all_tables(viewer, product_id):
 
         sync_design_params_to_element_params(product_id)
 
-        # 1124新修改-保存时增加元件定义腐蚀余量同步
+        # 1124新修改-保存时增加元件定义腐蚀余量/焊接接头系数同步
         try:
             labels = query_all_guankou_categories(product_id) or ["管口材料分类1"]
             for label in labels:
                 codes = query_guankou_codes(product_id, label) or []
-                sync_corrosion_to_guankou_param(product_id, codes, label)
+                # 读取内存中的“手动标志”：若该分类曾在元件界面被手动修改过，则仅“抬高不压低”；
+                # 否则视为纯条件输入/模板控制，允许条件输入完全覆盖（包括变小）。
+                is_manual = get_manual_flag(product_id, label)
+                sync_opening_weld_joint_coeff_to_guankou_param(
+                    product_id,
+                    codes,
+                    label,
+                    skip_category_sync=False,
+                    force_reset_from_condition=not is_manual,
+                )
+                # 腐蚀裕量：条件输入侧作为“总控”，此处强制覆盖所有管口的类别表取值
+                sync_corrosion_to_guankou_param(product_id, codes, label, overwrite_all_codes=True)
         except Exception as e:
             print(f"[警告] 设计数据保存后的腐蚀裕量同步失败: {e}")
 
