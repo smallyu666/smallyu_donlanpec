@@ -1325,23 +1325,23 @@ def delete_guankou_data_from_db(product_id, tab_name):
             if result:
                 # 使用Tab_ID删除
                 tab_id = result['Tab_ID']
-                print(f"[执行删除] DELETE FROM 管口附加参数表 WHERE 产品ID = {product_id} AND Tab_ID = {tab_id}")
+                print(f"[执行删除] DELETE FROM 产品设计活动表_管口附加参数表 WHERE 产品ID = {product_id} AND Tab_ID = {tab_id}")
                 cursor.execute("""
                     DELETE FROM 产品设计活动表_管口附加参数表
                     WHERE 产品ID = %s AND Tab_ID = %s
                 """, (product_id, tab_id))
             else:
                 # 使用类别删除（兼容旧数据）
-                print(f"[执行删除] DELETE FROM 管口附加参数表 WHERE 产品ID = {product_id} AND 类别 = {tab_name}")
+                print(f"[执行删除] DELETE FROM 产品设计活动表_管口附加参数表 WHERE 产品ID = {product_id} AND 类别 = {tab_name}")
                 cursor.execute("""
                     DELETE FROM 产品设计活动表_管口附加参数表
                     WHERE 产品ID = %s AND 类别 = %s
                 """, (product_id, tab_name))
 
         connection.commit()
-        print(f"[成功] 删除类别/Tab_ID {tab_name_or_tab_id} 相关数据")
+        print(f"[成功] 删除类别/Tab_ID {tab_name} 相关数据")
     except Exception as e:
-        print(f"[错误] 删除 {tab_name_or_tab_id} 数据失败: {e}")
+        print(f"[错误] 删除 {tab_name} 数据失败: {e}")
     finally:
         connection.close()
 
@@ -1467,13 +1467,25 @@ def query_guankou_default(product_form, product_type):
     finally:
         connection.close()
 
+def _component_to_material_category(component):
+    """根据管口所属元件判断材料分类：管程/管箱→管口材料分类-管程，壳程/壳体→管口材料分类-壳程"""
+    s = str(component or '')
+    if '管程' in s or '管箱' in s:
+        return '管口材料分类-管程'
+    # BES/BEM 等型式里常见“外头盖圆筒/外头盖…”：实际应归入壳程侧材料分类
+    # 否则会导致“材料分类=None”，从而不默认落到壳程 Tab。
+    if '壳程' in s or '壳体' in s or '外头盖' in s:
+        return '管口材料分类-壳程'
+    return None
+
+
 def insert_guankou_info(product_id, guankou_info, product_form=None, product_type=None):
     """将元件库/产品表的管口信息插入管口类别表中，自动删除旧数据
 
-    优先级：
-      1) 使用 产品设计活动表_管口表 中的管口功能 → 材料分类
-      2) 若 1) 查不到，再使用传入的 guankou_info 中自带的管口功能
-      3) 若仍无，且提供了 product_form/product_type，则从 元件库.管口默认表 查询管口功能
+    材料分类依据 管口所属元件（不再用管口功能）：
+      1) 优先从 产品设计活动表_管口表 读 管口代号、管口所属元件 → 材料分类
+      2) 若 1) 无，从 guankou_info 的 管口所属元件
+      3) 若仍无，且提供 product_form/product_type，从 元件库.管口默认表 读 管口所属元件
     """
     connection = get_connection(**db_config_1)
     try:
@@ -1487,73 +1499,70 @@ def insert_guankou_info(product_id, guankou_info, product_form=None, product_typ
 
             guankou_code_to_category = {}  # {管口代号: 材料分类}
 
-            # A) 优先从 产品设计活动表_管口表 读取最新的管口功能
+            # A) 优先从 产品设计活动表_管口表 读取 管口代号、管口所属元件
             try:
                 cursor.execute("""
-                    SELECT 管口代号, 管口功能
+                    SELECT 管口代号, 管口所属元件
                     FROM 产品设计活动表_管口表
                     WHERE 产品ID = %s
                 """, (product_id,))
                 guankou_rows = cursor.fetchall()
                 for row in guankou_rows:
                     code = (row.get('管口代号') or '').strip()
-                    func = row.get('管口功能', '')
-                    if not code or not func:
+                    comp = row.get('管口所属元件', '')
+                    if not code:
                         continue
-                    if '管程' in str(func):
-                        guankou_code_to_category[code] = '管口材料分类-管程'
-                    elif '壳程' in str(func):
-                        guankou_code_to_category[code] = '管口材料分类-壳程'
+                    cat = _component_to_material_category(comp)
+                    if cat:
+                        guankou_code_to_category[code] = cat
                 if guankou_rows:
-                    print(f"[管口分配] 从产品设计活动表_管口表查询到 {len(guankou_code_to_category)} 个管口的材料分类映射")
+                    print(f"[管口分配] 从产品设计活动表_管口表(管口所属元件)查询到 {len(guankou_code_to_category)} 个管口的材料分类映射")
             except Exception as e:
                 print(f"[警告] 查询产品设计活动表_管口表失败: {e}")
                 import traceback
                 traceback.print_exc()
 
-            # B) 若 A) 没有查到任何映射，再尝试从 guankou_info 自身提取管口功能（例如来自默认表）
+            # B) 若 A) 无映射，从 guankou_info 的 管口所属元件
             if not guankou_code_to_category:
                 for item in guankou_info:
                     if isinstance(item, dict):
                         code = (item.get('管口代号') or '').strip()
-                        func = item.get('管口功能', '')
+                        comp = item.get('管口所属元件', '')
                     else:
                         code = (item[1] if len(item) > 1 else '') or ''
-                        func = ''
-                    if not code or not func:
+                        comp = (item[2] if len(item) > 2 else '') or ''
+                    if not code:
                         continue
-                    if '管程' in str(func):
-                        guankou_code_to_category[code] = '管口材料分类-管程'
-                    elif '壳程' in str(func):
-                        guankou_code_to_category[code] = '管口材料分类-壳程'
+                    cat = _component_to_material_category(comp)
+                    if cat:
+                        guankou_code_to_category[code] = cat
 
-            # C) 若仍无映射，并且提供了 product_form/product_type，则从 元件库.管口默认表 兜底查询
+            # C) 若仍无，从 元件库.管口默认表 读 管口所属元件
             if not guankou_code_to_category and product_form and product_type:
                 try:
                     connection_default = get_connection(**db_config_3)
                     with connection_default.cursor(pymysql.cursors.DictCursor) as cursor_default:
                         cursor_default.execute("""
-                            SELECT 管口代号, 管口功能
+                            SELECT 管口代号, 管口所属元件
                             FROM 管口默认表
                             WHERE 所属类型 = %s AND 所属型式 = %s
                         """, (product_form, product_type))
                         default_rows = cursor_default.fetchall()
                         for row in default_rows:
                             code = (row.get('管口代号') or '').strip()
-                            func = row.get('管口功能', '')
-                            if not code or not func:
+                            comp = row.get('管口所属元件', '')
+                            if not code:
                                 continue
-                            if '管程' in str(func):
-                                guankou_code_to_category[code] = '管口材料分类-管程'
-                            elif '壳程' in str(func):
-                                guankou_code_to_category[code] = '管口材料分类-壳程'
-                        print(f"[管口分配] 从管口默认表查询到 {len(guankou_code_to_category)} 个管口的材料分类映射")
+                            cat = _component_to_material_category(comp)
+                            if cat:
+                                guankou_code_to_category[code] = cat
+                        print(f"[管口分配] 从管口默认表(管口所属元件)查询到 {len(guankou_code_to_category)} 个管口的材料分类映射")
                         for row in default_rows:
                             code = (row.get('管口代号') or '').strip()
-                            func = row.get('管口功能', '')
-                            category = guankou_code_to_category.get(code)
-                            if category:
-                                print(f"[管口分配] {code} (管口功能: {func}) → {category}")
+                            comp = row.get('管口所属元件', '')
+                            cat = guankou_code_to_category.get(code)
+                            if cat:
+                                print(f"[管口分配] {code} (管口所属元件: {comp}) → {cat}")
                     connection_default.close()
                 except Exception as e:
                     print(f"[警告] 查询管口默认表失败: {e}")
@@ -1575,7 +1584,7 @@ def insert_guankou_info(product_id, guankou_info, product_form=None, product_typ
                 material_category = guankou_code_to_category.get(code)
 
                 if not material_category and code:
-                    print(f"[警告] 管口代号 {code} 未找到对应的管口功能，材料分类为 None")
+                    print(f"[警告] 管口代号 {code} 未找到对应的管口所属元件映射，材料分类为 None")
 
                 sql = """
                     INSERT INTO 产品设计活动表_管口类别表
@@ -1602,65 +1611,6 @@ def insert_guankou_info(product_id, guankou_info, product_form=None, product_typ
 
     except pymysql.MySQLError as err:
         print(f"❌ 插入数据时出错: {err}")
-    finally:
-        connection.close()
-
-
-def update_guankou_material_category_from_pipe_table(product_id):
-    """
-    根据产品设计活动表_管口表的管口功能，更新产品设计活动表_管口类别表的材料分类
-    这个函数可以在任何时候调用，用于同步材料分类
-    """
-    connection = get_connection(**db_config_1)
-    try:
-        with connection.cursor(pymysql.cursors.DictCursor) as cursor:
-            # 查询产品设计活动表_管口表的所有管口数据
-            cursor.execute("""
-                SELECT 管口代号, 管口功能
-                FROM 产品设计活动表_管口表
-                WHERE 产品ID = %s
-            """, (product_id,))
-            guankou_table_rows = cursor.fetchall()
-            
-            if not guankou_table_rows:
-                print(f"[管口分配] 产品ID {product_id} 在产品设计活动表_管口表中没有数据，跳过更新")
-                return
-            
-            updated_count = 0
-            for row in guankou_table_rows:
-                guankou_code = row.get('管口代号', '') if row else ''
-                guankou_function = row.get('管口功能', '') if row else ''
-                
-                if not guankou_code:
-                    continue
-                
-                # 根据管口功能判断材料分类
-                material_category = None
-                if guankou_function:
-                    if '管程' in str(guankou_function):
-                        material_category = '管口材料分类-管程'
-                    elif '壳程' in str(guankou_function):
-                        material_category = '管口材料分类-壳程'
-                
-                # 更新产品设计活动表_管口类别表的材料分类
-                if material_category:
-                    cursor.execute("""
-                        UPDATE 产品设计活动表_管口类别表
-                        SET 材料分类 = %s
-                        WHERE 产品ID = %s AND 管口代号 = %s
-                    """, (material_category, product_id, guankou_code))
-                    updated_count += 1
-                    print(f"[管口分配] 更新 {guankou_code} (管口功能: {guankou_function}) → {material_category}")
-            
-            connection.commit()
-            if updated_count > 0:
-                print(f"[管口分配] ✅ 成功更新 {updated_count} 个管口的材料分类")
-            else:
-                print(f"[管口分配] ⚠️ 没有需要更新的管口（可能管口功能字段为空或不包含'管程'/'壳程'）")
-    except Exception as e:
-        print(f"[警告] 更新材料分类失败: {e}")
-        import traceback
-        traceback.print_exc()
     finally:
         connection.close()
 
