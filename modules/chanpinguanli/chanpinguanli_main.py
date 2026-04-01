@@ -783,6 +783,8 @@ def on_product_row_clicked(row, column):
         fetch_and_update_product_definition_by_id(bianl.product_id)
         print(f"点击第{row + 1}行，获取到的产品ID: {PRODUCT_ID}")
         product_manager.update_product_id(PRODUCT_ID)  # 第二个文件会自动收到新值改66
+        # 行切换后强制刷新示意图：若类型/型式与上一行相同，setCurrentText 不会触发 currentTextChanged，try_show_image 不会跑
+        try_show_image()
     definition_status = row_status.get("definition_status", "edit")
 
     # 根据状态锁定或解锁定义区控件 改77
@@ -1536,55 +1538,70 @@ def try_show_image():
 
 # 示意图  被调用显示的
 def fetch_and_display_image_by_type_form(product_type, product_form):
-    """根据产品类型和产品形式从数据库加载并显示示意图（自动补全图片扩展名）"""
+    """示意图加载：产品快照-产品需求表优先，模板-产品类型型式表兜底。"""
     try:
         print(f"尝试加载示意图，产品类型: {product_type}, 产品形式: {product_form}")
-        conn = common_usage.get_mysql_connection_def()
+        base_path = os.path.dirname(os.path.abspath(__file__))
 
-        cursor = conn.cursor()
+        def try_apply_relative_path(relative_path, source_tag):
+            if not relative_path:
+                return False
+            normalized_path = relative_path.replace("\\", os.sep).strip()
+            image_path = os.path.join(base_path, normalized_path)
+            print(f"[{source_tag}] 尝试图片路径: {image_path}")
+            if not os.path.exists(image_path):
+                print(f"[{source_tag}] 图片文件不存在")
+                return False
 
-        sql = """
+            pixmap = QPixmap(image_path)
+            if pixmap.isNull():
+                print(f"[{source_tag}] QPixmap 加载失败，文件格式可能不支持")
+                return False
+
+            bianl.confirm_curr_image_relative_path = normalized_path
+            scaled_pixmap = pixmap.scaled(
+                bianl.image_area.width() - 20,
+                bianl.image_area.height() - 20,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+            bianl.image_label.setPixmap(scaled_pixmap)
+            bianl.image_label.setText("")
+            print(f"[{source_tag}] 图片加载并显示成功")
+            return True
+
+        # 1) 产品快照优先：从产品需求表读取当前产品已保存的示意图路径
+        snapshot_relative_path = ""
+        if getattr(bianl, "product_id", None):
+            conn_pd = common_usage.get_mysql_connection_product()
+            cursor_pd = conn_pd.cursor()
+            sql_pd = "SELECT 产品示意图 FROM 产品需求表 WHERE 产品ID = %s"
+            cursor_pd.execute(sql_pd, (bianl.product_id,))
+            result_pd = cursor_pd.fetchone()
+            cursor_pd.close()
+            conn_pd.close()
+            snapshot_relative_path = (result_pd or {}).get("产品示意图", "")
+            print(f"[快照来源] 查询结果: {snapshot_relative_path}")
+
+        if try_apply_relative_path(snapshot_relative_path, "快照来源"):
+            return
+
+        # 2) 模板兜底：按产品类型+产品型式读取模板图
+        conn_def = common_usage.get_mysql_connection_def()
+        cursor_def = conn_def.cursor()
+        sql_def = """
             SELECT 产品示意图 FROM 产品类型型式表
             WHERE 产品类型 = %s AND 产品型式 = %s
         """
-        cursor.execute(sql, (product_type, product_form))
-        result = cursor.fetchone()
-        print(f"数据库查询结果: {result}")
-        cursor.close()
-        conn.close()
+        cursor_def.execute(sql_def, (product_type, product_form))
+        result_def = cursor_def.fetchone()
+        cursor_def.close()
+        conn_def.close()
 
-        if result and result.get("产品示意图"):
-            relative_path = result["产品示意图"].replace("\\", os.sep).strip()
-            print(f"数据库中读取到的相对路径: {relative_path}")
-
-            base_path = os.path.dirname(os.path.abspath(__file__))
-            image_path = os.path.join(base_path, relative_path)
-            print(f"拼接后的基础路径: {image_path}")
-
-            if os.path.exists(image_path):
-
-                print("图片路径存在，开始加载")
-                bianl.confirm_curr_image_relative_path = relative_path
-                pixmap = QPixmap(image_path)
-                if pixmap.isNull():
-                    print("QPixmap 加载失败，文件格式可能不支持")
-                    # bianl.image_label.setText("图片格式不支持")
-                    return
-                scaled_pixmap = pixmap.scaled(
-                    bianl.image_area.width() - 20,
-                    bianl.image_area.height() - 20,
-                    Qt.KeepAspectRatio,
-                    Qt.SmoothTransformation
-                )
-                bianl.image_label.setPixmap(scaled_pixmap)
-                bianl.image_label.setText("")
-                print("图片加载并显示成功")
-            else:
-                print(f"数据库图片文件最终未找到: {image_path}")
-                # bianl.image_label.setText("数据库没有存此样图")
-        else:
-            print("未找到对应的示意图路径字段")
-            # bianl.image_label.setText("无对应示意图")
+        template_relative_path = (result_def or {}).get("产品示意图", "")
+        print(f"[模板来源] 查询结果: {template_relative_path}")
+        if not try_apply_relative_path(template_relative_path, "模板来源"):
+            print("示意图未找到可用路径（快照与模板均不可用）")
     except Exception as e:
         print(f"加载示意图失败: {e}")
         # bianl.image_label.setText("数据库连接失败")
