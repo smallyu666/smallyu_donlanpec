@@ -17,6 +17,45 @@ _dn_allowed_values_cache = {
     '以内径为基准': None,
     '以外径为基准': None
 }
+_raw_product_form_cache = {}
+
+
+def _get_raw_product_form_from_product_db(table_widget) -> str:
+    """
+    获取产品需求表中的原始“产品型式”（不做 all 映射）。
+    失败时返回空串。
+    """
+    try:
+        if not table_widget:
+            return ""
+        viewer = getattr(table_widget, "viewer", None)
+        product_id = getattr(viewer, "product_id", None) if viewer else None
+        if not product_id:
+            return ""
+
+        cached = _raw_product_form_cache.get(product_id)
+        if cached is not None:
+            return cached
+
+        from modules.chanpinguanli.common_usage import get_mysql_connection_product
+
+        conn = get_mysql_connection_product()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT 产品型式 FROM 产品需求表 WHERE 产品ID = %s LIMIT 1",
+                    (product_id,)
+                )
+                row = cursor.fetchone()
+                raw_form = (row.get("产品型式", "") if isinstance(row, dict) else (row[0] if row else "")) or ""
+                raw_form = str(raw_form).strip()
+                _raw_product_form_cache[product_id] = raw_form
+                return raw_form
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[_get_raw_product_form_from_product_db] 查询失败: {e}")
+        return ""
 
 def fetch_dn_allowed_values_from_db(config_type: str) -> Set[int]:
     """
@@ -173,8 +212,19 @@ def check_dn(value, tip_widget, param_name, column_name, table_widget, col_index
             if dn_val * dp_val > 27000:
                 return "error", "公称直径与设计压力乘积超过GB/T 151-2014的适用范围，请核对后输入"
 
+        # AKU/BKU 特殊规则：
+        # 仅当壳/管都已填写时，要求互不相等，且壳程 > 管程
+        raw_product_form = _get_raw_product_form_from_product_db(table_widget)
+        if raw_product_form in ("AKU", "BKU"):
+            if dn_shell is not None and dn_tube is not None:
+                if dn_shell == dn_tube:
+                    return "error", "AKU/BKU产品公称直径要求壳程与管程数值不同，请核对后输入"
+                if dn_shell < dn_tube:
+                    return "error", "AKU/BKU产品公称直径要求壳程数值大于管程数值，请核对后输入"
+
         if dn_shell is not None and dn_tube is not None:
-            if dn_shell != dn_tube:
+            # AKU/BKU 已有专属规则，不再提示“壳管不一致请确认”
+            if raw_product_form not in ("AKU", "BKU") and dn_shell != dn_tube:
                 return "warn", "管、壳程公称直径不一致，请确认"
 
     return "ok", ""
