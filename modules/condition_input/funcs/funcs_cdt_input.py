@@ -482,8 +482,8 @@ def autofill_outer_diameter(viewer: QWidget):
     1. 外径系列优先使用通用数据表当前值；
        若当前为空，再根据user_config(2.2.11.2 / 2.2.11.3)给一个默认系列；
     2. 外径值优先从user_config的2.2.11.1映射表查找；
-    3. 映射表没有对应DN时，按公式 round(25.4 * DN / 25, 0) 计算，
-       界面显示"—"，但计算值会保存到数据库。
+    3. 映射表没有对应DN时，按公式 round(25.4 * DN / 25, 0) 计算并显示在「外径」；
+       若当前「外径系列」为「-」，则保持「-」；否则保留用户当前选择。
     """
     # 未就绪时不进行自动填充（避免界面进入前弹窗）
     if not getattr(viewer, "_outer_autofill_ready", False):
@@ -510,55 +510,77 @@ def autofill_outer_diameter(viewer: QWidget):
             return
 
         # === 步骤1：确定外径系列（优先使用界面值，其次配置库默认） ===
-        # ① 先从通用数据表当前值读取外径系列
-        series = _get_series_from_general(viewer)
+        # ① 先从通用数据表当前值读取外径系列（「-」表示上表未列出 DN 时的公式态，视为已选）
+        series_ui = _get_series_from_general(viewer)
 
         # ② 若当前没有外径系列，再从user_config读取默认系列
-        if not series:
+        if not series_ui:
             series_from_cfg = _determine_diameter_series()
             if series_from_cfg:
                 _set_general_outer_diameter_series(viewer, series_from_cfg)
-                series = series_from_cfg
+                series_ui = series_from_cfg
 
         # ③ 依然没有系列信息，则无法计算外径，只把界面置为"—"
-        if not series:
+        if not series_ui:
             _set_general_outer_diameter(viewer, "—")
             if hasattr(viewer, "_calculated_outer_diameter"):
                 viewer._calculated_outer_diameter = None
             setattr(viewer, "_outer_last_pair", (dn, None))
             return
 
-        # 若与上一次处理的 (dn, series) 完全一致，直接返回，避免重复计算
+        # 查映射表用的系列：界面为「-」时用配置库默认系列尝试（否则 DN 回到表内时无法命中）
+        if series_ui == "-":
+            lookup_series = _determine_diameter_series() or "公制系列"
+        else:
+            lookup_series = series_ui
+
+        # 若与上一次处理的 (dn, 界面系列) 完全一致，直接返回，避免重复计算
         last_pair = getattr(viewer, "_outer_last_pair", None)
-        cur_pair = (dn, series)
+        cur_pair = (dn, series_ui)
         if last_pair == cur_pair:
             return
 
         # === 步骤2：从映射表查找外径值 ===
-        outer_d_from_mapping = _get_outer_diameter_from_mapping(dn, series)
+        outer_d_from_mapping = _get_outer_diameter_from_mapping(dn, lookup_series)
 
         if outer_d_from_mapping:
             # 映射表中存在，直接使用映射值
             _set_general_outer_diameter(viewer, outer_d_from_mapping)
-            # 清除计算值缓存（因为使用的是映射值）
             if hasattr(viewer, "_calculated_outer_diameter"):
                 viewer._calculated_outer_diameter = None
+            # 一旦命中映射表，清除“上一次不在表内DN”标记
+            try:
+                setattr(viewer, "_outer_last_non_table_dn", None)
+            except Exception:
+                pass
+            # 公式态（外径系列为「-」）下查表命中后，恢复为英制/公制显示
+            if series_ui == "-":
+                _set_general_outer_diameter_series(viewer, lookup_series)
+            setattr(viewer, "_outer_last_pair", (dn, lookup_series))
         else:
-            # 映射表中不存在，使用公式计算
-            # 公式：外径值 = round(25.4 * DN / 25, 0)
+            # 映射表中不存在：外径显示公式计算值。
+            # 规则：
+            # - 如果仍是“同一个不在表内的 DN”，允许保留用户手动修改过的外径系列（英制/公制）。
+            # - 如果 DN 变成了“另一个不在表内的值”，则强制外径系列显示为「-」（公式态）。
             calculated_value = round(25.4 * dn / 25, 0)
             calculated_value_str = str(int(calculated_value))
-            
-            # 界面显示"—"
-            _set_general_outer_diameter(viewer, "—")
-            
-            # 保存计算值到缓存（用于保存到数据库）
-            if not hasattr(viewer, "_calculated_outer_diameter"):
-                viewer._calculated_outer_diameter = {}
-            viewer._calculated_outer_diameter = calculated_value_str
-            print(f"[外径计算] DN={dn}, 系列={series}, 计算值={calculated_value_str}, 界面显示=—")
-        
-        setattr(viewer, "_outer_last_pair", cur_pair)
+            _set_general_outer_diameter(viewer, calculated_value_str)
+            if hasattr(viewer, "_calculated_outer_diameter"):
+                viewer._calculated_outer_diameter = None
+            last_non_table_dn = getattr(viewer, "_outer_last_non_table_dn", None)
+            # 第一次进入“公式态”（例如：切换“是否以外径为基准*”为“是”后、或首次输入不在表内DN）
+            # 以及从一个不在表内DN切到另一个不在表内DN时，都强制外径系列显示为「-」。
+            should_force_dash = (last_non_table_dn is None) or (last_non_table_dn != dn)
+            if should_force_dash:
+                _set_general_outer_diameter_series(viewer, "-")
+                series_effective = "-"
+            else:
+                series_effective = series_ui
+            setattr(viewer, "_outer_last_non_table_dn", dn)
+            print(
+                f"[外径计算] DN={dn}, 映射无此行，公式外径={calculated_value_str}, 外径系列={series_effective}, last_non_table_dn={last_non_table_dn}"
+            )
+            setattr(viewer, "_outer_last_pair", (dn, series_effective))
     finally:
         setattr(viewer, "_outer_autofill_lock", False)
 
@@ -1862,11 +1884,13 @@ def sync_design_params_to_element_params(product_id):
         update_element_name_data(product_id, "固定管板", "管程侧腐蚀裕量", str(tube_ca))
         update_element_name_data(product_id, "浮动管板", "管程侧腐蚀裕量", str(tube_ca))
         update_element_name_data(product_id, "球冠形封头", "管程侧腐蚀裕量", str(tube_ca))
+        update_element_name_data(product_id, "浮头法兰", "管程侧腐蚀裕量", str(tube_ca))
 
     if shell_ca:
         update_element_name_data(product_id, "固定管板", "壳程侧腐蚀裕量", str(shell_ca))
         update_element_name_data(product_id, "浮动管板", "壳程侧腐蚀裕量", str(shell_ca))
         update_element_name_data(product_id, "球冠形封头", "壳程侧腐蚀裕量", str(shell_ca))
+        update_element_name_data(product_id, "浮头法兰", "壳程侧腐蚀裕量", str(shell_ca))
 
     try:
         sync_yanban_height_if_exceeds_shell_dn(product_id)
