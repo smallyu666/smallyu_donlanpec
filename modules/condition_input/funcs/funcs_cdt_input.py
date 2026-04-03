@@ -3,8 +3,7 @@ from openpyxl.styles import Alignment
 from modules.cailiaodingyi.funcs.funcs_pdf_change import update_element_name_data, \
     get_design_params_by_product_id, update_guankou_param_flex_db, query_guankou_affiliation, resolve_gasket_dimensions, query_guankou_codes, \
     invalidate_caches_for_product, update_guankou_corrosion_to_category_table, update_guankou_opening_weld_joint_coeff_to_category_table, \
-    sync_yanban_height_if_exceeds_shell_dn, \
-    db_config_1 as design_db_config_1
+    sync_yanban_height_if_exceeds_shell_dn,db_config_1 as design_db_config_1
 from modules.cailiaodingyi.controllers.check_dianpian import clear_all_pn_user_input_for_product, force_recompute_and_update_pn
 from modules.cailiaodingyi.funcs.funcs_pdf_input import query_all_guankou_categories
 # from modules.cailiaodingyi.funcs.funcs_pdf_change import update_element_name_data, \
@@ -3621,12 +3620,41 @@ def is_file_locked(filepath: str) -> bool:
     except IOError:
         return True
 
+
+def _offer_delete_product_when_local_excel_missing(product_id: int, viewer: QWidget, detail: str) -> None:
+    """本地条件输入 xlsx 不存在时询问是否按产品管理同款逻辑从软件中移除该产品。"""
+    from modules.chanpinguanli import project_confirm_btn, chanpinguanli_main
+
+    parent = viewer if viewer is not None else bianl.main_window
+    if project_confirm_btn.show_confirm_dialog(
+        parent,
+        "本地文件缺失",
+        "本地「条件输入数据表」不存在（产品文件夹可能已删除或移动）。\n\n"
+        f"{detail}\n\n"
+        "是否从软件中删除该产品？将同时删除数据库中的产品需求与产品设计活动数据。",
+    ):
+        ok = chanpinguanli_main.delete_product_by_id_after_missing_local(product_id)
+        if not ok:
+            QMessageBox.warning(
+                parent,
+                "提示",
+                "未能完成删除，请到「产品管理」界面手动删除该产品。",
+            )
+
+
 def save_local_condition_file(product_id: int, viewer: QWidget) -> bool:
     """
     保存界面数据到本地 Excel，如果文件被占用则提示并返回 False。
     —— 改动：写出时使用“默认顺序”的行索引，确保导出的 Excel 始终是固定顺序。
     """
-    local_path = get_ref_data_excel_path(product_id)
+    try:
+        local_path = get_ref_data_excel_path(product_id)
+    except FileNotFoundError as e:
+        detail = str(e)
+        print(f"未找到本地条件数据路径：{detail}")
+        _offer_delete_product_when_local_excel_missing(product_id, viewer, detail)
+        return False
+
     print(f"{local_path}")
     if is_file_locked(local_path):
         QMessageBox.warning(viewer, "文件占用", f"请先关闭本地文件：\n{local_path}\n然后重试保存。")
@@ -3635,6 +3663,9 @@ def save_local_condition_file(product_id: int, viewer: QWidget) -> bool:
         wb = load_workbook(local_path)
     except FileNotFoundError:
         print(f"未找到本地条件数据文件：{local_path}")
+        _offer_delete_product_when_local_excel_missing(
+            product_id, viewer, f"未找到文件：{local_path}"
+        )
         return False
     # === 关键：获取每张表的“默认写出顺序”索引 ===
     order_std     = get_row_index_order_for_default_write(viewer.tableWidget_product_std)
