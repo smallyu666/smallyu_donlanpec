@@ -3157,7 +3157,7 @@ def apply_dn_standard_range_user_prompt(viewer, table, row, col, value: str) -> 
         )
 
         raw_form = (_get_raw_product_form(table) or "").strip().upper()
-
+# 1233333
         # 0526新修改-akubku时取“管程”的“公称直径”做判断111
         if raw_form in ("AKU", "BKU") and col_name != "管程数值":
             return True
