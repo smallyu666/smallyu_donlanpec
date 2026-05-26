@@ -1,0 +1,418 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Conditional_input</class>
+ <widget class="QWidget" name="Conditional_input">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>630</width>
+    <height>532</height>
+   </rect>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>600</width>
+    <height>500</height>
+   </size>
+  </property>
+  <property name="maximumSize">
+   <size>
+    <width>16777215</width>
+    <height>16777215</height>
+   </size>
+  </property>
+  <property name="baseSize">
+   <size>
+    <width>600</width>
+    <height>500</height>
+   </size>
+  </property>
+  <property name="cursor">
+   <cursorShape>ArrowCursor</cursorShape>
+  </property>
+  <property name="windowTitle">
+   <string>条件输入</string>
+  </property>
+  <property name="styleSheet">
+   <string notr="true">/* 滚动条整体样式 */
+
+    /* ====================== 复用文件1的下拉框样式 ====================== */
+QComboBox {
+    border: 1px solid #a9a9a9;
+    border-radius: 0px;
+    background-color: #ffffff;
+    color: #000;
+    padding: 2px 30px 2px 10px;
+    min-height: 30px;
+    font-size: 12pt;
+}
+
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 26px;
+    border: none;
+    background-color: transparent;
+}
+
+QComboBox::down-arrow {
+    image: url(modules/chanpinguanli/icons/下箭头.png);  /* 你自己的箭头路径 */
+    width: 16px;
+    height: 16px;
+}
+/* ================================================================ */
+
+QScrollBar:vertical {
+    background-color: #f5f5f5;
+    width: 14px;
+    margin: 0px;
+}
+
+/* 滚动条滑块 */
+QScrollBar::handle:vertical {
+    background-color: #c4c4c4;
+    border-radius: 7px;
+    min-height: 30px;
+}
+
+/* 滑块悬浮 */
+QScrollBar::handle:vertical:hover {
+    background-color: #a0a0a0;
+}
+
+/* 滑块按下 */
+QScrollBar::handle:vertical:pressed {
+    background-color: #888888;
+}
+
+/* 滚动条上下箭头（隐藏） */
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    border: none;
+    background: none;
+    height: 0px;
+}
+
+/* 滚动条背景区域 */
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {
+    background: none;
+}
+/* 仅替换表格内 QComboBox 的下拉箭头图片，其余样式继承全局 */
+QTableWidget QComboBox::down-arrow {
+    image: url(modules/chanpinguanli/icons/下箭头.png);
+}</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout" stretch="0,0">
+   <item>
+    <widget class="QGroupBox" name="groupBox_condition_input">
+     <property name="font">
+      <font>
+       <family>Arial</family>
+       <pointsize>12</pointsize>
+      </font>
+     </property>
+     <property name="styleSheet">
+      <string notr="true">QGroupBox#groupBox_condition_input { border: none; }
+
+
+QPushButton#btn_inputrefdata,
+QPushButton#btn_output,
+QPushButton#toolButton_3,
+QPushButton#btn_confirm {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                                stop: 0 #ffffff, stop: 1 #e8edf5);
+    border: 1px solid #b8c8e0;
+    border-radius: 0px;
+    color: #000000;
+    font-size: 17px;
+    padding: 8px 20px;
+    text-align: center;
+    min-width: 65px;
+
+
+}
+QPushButton#btn_inputrefdata:hover,
+QPushButton#btn_output:hover,
+QPushButton#toolButton_3:hover,
+QPushButton#btn_confirm:hover {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                                stop: 0 #f0f4fa, stop: 1 #d8e0ed);
+    border-color: #9ab0d0;
+}
+QPushButton#btn_inputrefdata:pressed,
+QPushButton#btn_output:pressed,
+QPushButton#toolButton_3:pressed,
+QPushButton#btn_confirm:pressed {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                                stop: 0 #e0e6f0, stop: 1 #c8d2e0);
+    border-color: #7a90b0;
+}
+QPushButton#btn_inputrefdata:disabled,
+QPushButton#btn_output:disabled,
+QPushButton#toolButton_3:disabled,
+QPushButton#btn_confirm:disabled {
+    background: #f5f7fa;
+    color: #888888;
+    border-color: #d0d8e5;
+}</string>
+     </property>
+     <property name="title">
+      <string/>
+     </property>
+     <property name="flat">
+      <bool>true</bool>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_7">
+      <item>
+       <layout class="QHBoxLayout" name="topRightButtonLayout" stretch="0,0,0,0,0,1">
+        <property name="spacing">
+         <number>15</number>
+        </property>
+        <property name="sizeConstraint">
+         <enum>QLayout::SetDefaultConstraint</enum>
+        </property>
+        <item>
+         <widget class="QComboBox" name="combo_mode">
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>36</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>16777215</width>
+            <height>38</height>
+           </size>
+          </property>
+          <property name="editable">
+           <bool>false</bool>
+          </property>
+          <property name="currentText">
+           <string/>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btn_inputrefdata">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>107</width>
+            <height>38</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>16777215</width>
+            <height>38</height>
+           </size>
+          </property>
+          <property name="text">
+           <string>导入</string>
+          </property>
+          <property name="icon">
+           <iconset>
+            <normaloff>../chanpinguanli/icons/导入.png</normaloff>../chanpinguanli/icons/导入.png</iconset>
+          </property>
+          <property name="iconSize">
+           <size>
+            <width>18</width>
+            <height>18</height>
+           </size>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btn_output">
+          <property name="minimumSize">
+           <size>
+            <width>107</width>
+            <height>38</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>16777215</width>
+            <height>38</height>
+           </size>
+          </property>
+          <property name="text">
+           <string>导出</string>
+          </property>
+          <property name="icon">
+           <iconset>
+            <normaloff>../chanpinguanli/icons/导出.png</normaloff>../chanpinguanli/icons/导出.png</iconset>
+          </property>
+          <property name="iconSize">
+           <size>
+            <width>18</width>
+            <height>18</height>
+           </size>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="toolButton_3">
+          <property name="minimumSize">
+           <size>
+            <width>107</width>
+            <height>38</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>16777215</width>
+            <height>38</height>
+           </size>
+          </property>
+          <property name="text">
+           <string>预览</string>
+          </property>
+          <property name="icon">
+           <iconset>
+            <normaloff>../chanpinguanli/icons/预览.png</normaloff>../chanpinguanli/icons/预览.png</iconset>
+          </property>
+          <property name="iconSize">
+           <size>
+            <width>18</width>
+            <height>18</height>
+           </size>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btn_confirm">
+          <property name="minimumSize">
+           <size>
+            <width>107</width>
+            <height>38</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>16777215</width>
+            <height>38</height>
+           </size>
+          </property>
+          <property name="text">
+           <string>保存</string>
+          </property>
+          <property name="icon">
+           <iconset>
+            <normaloff>../chanpinguanli/icons/保存.png</normaloff>../chanpinguanli/icons/保存.png</iconset>
+          </property>
+          <property name="iconSize">
+           <size>
+            <width>18</width>
+            <height>18</height>
+           </size>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_2">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>80</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QTabWidget" name="tabWidget_datatable">
+        <property name="styleSheet">
+         <string notr="true">QTabWidget#tabWidget_datatable { border: none; }</string>
+        </property>
+        <property name="currentIndex">
+         <number>1</number>
+        </property>
+        <widget class="QWidget" name="tab_product_std">
+         <attribute name="title">
+          <string>产品标准</string>
+         </attribute>
+         <layout class="QVBoxLayout" name="verticalLayout_3">
+          <item>
+           <widget class="QTableWidget" name="tableWidget_product_std">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+            <property name="minimumSize">
+             <size>
+              <width>0</width>
+              <height>0</height>
+             </size>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+        <widget class="QWidget" name="tab_design_data">
+         <attribute name="title">
+          <string>设计数据</string>
+         </attribute>
+         <layout class="QVBoxLayout" name="verticalLayout_2">
+          <item>
+           <widget class="QTableWidget" name="tableWidget_design_data"/>
+          </item>
+         </layout>
+        </widget>
+        <widget class="QWidget" name="tab_general_data">
+         <attribute name="title">
+          <string>通用数据</string>
+         </attribute>
+         <layout class="QVBoxLayout" name="verticalLayout_4">
+          <item>
+           <widget class="QTableWidget" name="tableWidget_general_data"/>
+          </item>
+         </layout>
+        </widget>
+        <widget class="QWidget" name="tab_trail_data">
+         <attribute name="title">
+          <string>检测数据</string>
+         </attribute>
+         <layout class="QVBoxLayout" name="verticalLayout_5">
+          <item>
+           <widget class="QTableWidget" name="tableWidget_trail_data"/>
+          </item>
+         </layout>
+        </widget>
+        <widget class="QWidget" name="tab_coating_data">
+         <attribute name="title">
+          <string>涂漆数据</string>
+         </attribute>
+         <layout class="QVBoxLayout" name="verticalLayout_6">
+          <item>
+           <widget class="QTableWidget" name="tableWidget_coating_data"/>
+          </item>
+         </layout>
+        </widget>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="horizontalLayout_3"/>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

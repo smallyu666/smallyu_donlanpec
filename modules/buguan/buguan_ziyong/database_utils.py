@@ -1,5 +1,41 @@
 import pymysql
 
+
+def create_activity_connection():
+    """创建产品设计活动库数据库连接"""
+    try:
+        connection = pymysql.connect(
+            host='localhost',
+            port=3306,
+            database='产品设计活动库',
+            user='root',
+            password='123456',
+            charset='utf8mb4',
+            cursorclass=pymysql.cursors.DictCursor
+        )
+        return connection
+    except pymysql.MySQLError as e:
+        print(f"连接产品设计活动库时出错: {e}")
+        return None
+
+
+def create_component_connection():
+    """创建元件库数据库连接"""
+    try:
+        connection = pymysql.connect(
+            host='localhost',
+            port=3306,
+            database='元件库',
+            user='root',
+            password='123456',
+            charset='utf8mb4',
+            cursorclass=pymysql.cursors.DictCursor
+        )
+        return connection
+    except pymysql.MySQLError as e:
+        print(f"连接元件库时出错: {e}")
+        return None
+
 def create_connection():
     """创建数据库连接"""
     try:

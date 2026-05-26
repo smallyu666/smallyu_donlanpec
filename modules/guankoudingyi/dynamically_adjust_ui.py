@@ -179,6 +179,7 @@ class CustomSelectionModel(QItemSelectionModel):
 class Stats(QtWidgets.QWidget):
     def __init__(self, line_tip=None):
         super().__init__()
+        self._local_readonly_mode = False
 
         # 0903会议纪要 首先进行项目和产品检查
         print("准备检查项目和产品状态...")
@@ -317,6 +318,25 @@ class Stats(QtWidgets.QWidget):
         # 仅用于第4-8列（公称尺寸、法兰标准、压力等级、法兰型式、密封面型式）
         self.bulk_assign_target_column = None
         self.bulk_assign_rows = []
+
+    def set_readonly_mode(self, readonly: bool = True):
+        self._local_readonly_mode = bool(readonly)
+        self.tableWidget_pipe.setEnabled(not readonly)
+        self.tableWidget_pipe.setEditTriggers(
+            QtWidgets.QAbstractItemView.NoEditTriggers if readonly else QtWidgets.QAbstractItemView.AllEditTriggers
+        )
+        # 禁用所有按钮
+        for btn in self.findChildren(QtWidgets.QPushButton):
+            btn.setEnabled(not readonly)
+        # 禁用全部下拉（含表头单位下拉）
+        for combo in self.findChildren(QtWidgets.QComboBox):
+            combo.setEnabled(not readonly)
+        # 禁用表格内已有的 cellWidget
+        for r in range(self.tableWidget_pipe.rowCount()):
+            for c in range(self.tableWidget_pipe.columnCount()):
+                w = self.tableWidget_pipe.cellWidget(r, c)
+                if w is not None:
+                    w.setEnabled(not readonly)
 
 
     """设置冻结的表头"""
@@ -525,7 +545,7 @@ class Stats(QtWidgets.QWidget):
         min_widths = {
             0: 70,  # 序号
             1: 110,  # 管口代号
-            2: 110,  # 管口功能
+            2: 165,  # 管口功能
             3: 110,  # 管口用途
             4: 110,  # 公称尺寸
             5: 240,  # 法兰标准
@@ -631,6 +651,8 @@ class Stats(QtWidgets.QWidget):
     """处理单元格单击的监听，单击变成下拉框"""
     def handle_pipe_cell_click(self, row, column):
         """监听管口表单元格点击，若是五个目标字段，则转换为下拉框"""
+        if getattr(self, "_local_readonly_mode", False):
+            return
         # 首先检查最后一行的限制：如果是最后一行且没有管口代号，不允许编辑
         table = self.tableWidget_pipe
         if row == table.rowCount() - 1:

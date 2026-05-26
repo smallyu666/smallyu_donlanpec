@@ -7,6 +7,7 @@ from PyQt5.QtCore import Qt, QEvent, QRect, QObject, QPoint
 from PyQt5.QtGui import QCursor, QBrush, QColor
 from PyQt5 import uic
 import os
+import math
 from modules.guankoudingyi.db_cnt import get_connection, db_config_1, db_config_2
 import pymysql.cursors
 import traceback
@@ -263,7 +264,7 @@ def get_standard_flange_pressure_level_default_value(product_id, stats_widget=No
         default_standard = "HG/T 20615-2009"
         default_level = "150"
     else:  # PN
-        default_standard = "HG/T 20592-2009"
+        default_standard = "HG/T 20592(A)-2009"
         default_level = "10"
     
     # 公称尺寸设定为空
@@ -421,37 +422,185 @@ def handle_class_flange_standard_change(stats_widget, row, new_standard, old_sta
         try:
             stats_widget.suppress_cell_change = True
             
-            # 设置压力等级为150（第6列）
+            # 获取当前压力等级（第6列）
             pressure_level_item = table.item(row, 6)
-            if not pressure_level_item:
-                pressure_level_item = QTableWidgetItem()
-                table.setItem(row, 6, pressure_level_item)
-            pressure_level_item.setText("150")
-            pressure_level_item.setTextAlignment(Qt.AlignCenter)
-            
-            # 设置法兰型式为空（第7列）
-            flange_type_item = table.item(row, 7)
-            if not flange_type_item:
-                flange_type_item = QTableWidgetItem()
-                table.setItem(row, 7, flange_type_item)
-            flange_type_item.setText("")
-            flange_type_item.setTextAlignment(Qt.AlignCenter)
-            
-            # 设置密封面型式为空（第8列）
-            seal_type_item = table.item(row, 8)
-            if not seal_type_item:
-                seal_type_item = QTableWidgetItem()
-                table.setItem(row, 8, seal_type_item)
-            seal_type_item.setText("")
-            seal_type_item.setTextAlignment(Qt.AlignCenter)
+            current_pressure_level = pressure_level_item.text().strip() if pressure_level_item else ""
 
-            #设置公称尺寸列为空（第4列）
-            seal_type_item = table.item(row, 4)
-            if not seal_type_item:
-                seal_type_item = QTableWidgetItem()
-                table.setItem(row, 4, seal_type_item)
-            seal_type_item.setText("")
-            seal_type_item.setTextAlignment(Qt.AlignCenter)
+            # 查询新标准下的所有压力等级（Class类型）
+            new_standard_pressure_levels = get_pressure_levels_by_standard(new_standard, "Class")
+
+            # 判断当前压力等级是否在新标准下存在
+            if current_pressure_level and new_standard_pressure_levels:
+                # Class类型下，压力等级单元格就是纯数字字符串，如 "150", "300"
+                try:
+                    current_level_value = int(current_pressure_level)
+                    # 检查当前压力等级是否在新标准下存在
+                    if current_level_value in new_standard_pressure_levels:
+                        # 保留当前压力等级
+                        if not pressure_level_item:
+                            pressure_level_item = QTableWidgetItem()
+                            table.setItem(row, 6, pressure_level_item)
+                        pressure_level_item.setText(current_pressure_level)
+                        pressure_level_item.setTextAlignment(Qt.AlignCenter)
+                    else:
+                        # 当前压力等级在新标准下不存在，使用推荐逻辑
+                        # 获取管口相关信息
+                        product_id = stats_widget.product_id
+                        pipe_belong_item = table.item(row, 10)  # 第10列：管口所属元件
+                        pipe_belong = pipe_belong_item.text().strip() if pipe_belong_item else ""
+                        pipe_code_item = table.item(row, 1)  # 第1列：管口代号
+                        pipe_code = pipe_code_item.text().strip() if pipe_code_item else ""
+
+                        # 调用推荐逻辑获取最小压力等级
+                        recommended_level = None
+                        if product_id and pipe_belong:
+                            flange_info, _ = get_minimum_pressure_level_for_flanges(
+                                product_id,
+                                pipe_belong,
+                                "Class",
+                                pipe_id=None,
+                                pipe_code=pipe_code,
+                                flange_std=new_standard
+                            )
+
+                            if flange_info and len(flange_info) > 0:
+                                # 从多个推荐值中提取最高的压力等级
+                                pressure_level_values = []
+                                for info in flange_info:
+                                    min_level_str = info.get('min_pressure_level', '')
+                                    # 格式为 "Class 150"，提取数字部分
+                                    if min_level_str.startswith("Class "):
+                                        try:
+                                            level_value = int(min_level_str.replace("Class ", "").strip())
+                                            pressure_level_values.append(level_value)
+                                        except (ValueError, AttributeError):
+                                            continue
+
+                                if pressure_level_values:
+                                    # 取最高的压力等级
+                                    recommended_level = max(pressure_level_values)
+
+                        # 如果未查询到推荐值，则设为300
+                        if recommended_level is None:
+                            recommended_level = 300
+
+                        # 设置推荐的压力等级
+                        if not pressure_level_item:
+                            pressure_level_item = QTableWidgetItem()
+                            table.setItem(row, 6, pressure_level_item)
+                        pressure_level_item.setText(str(recommended_level))
+                        pressure_level_item.setTextAlignment(Qt.AlignCenter)
+                except (ValueError, TypeError):
+                    # 如果当前压力等级不是有效数字，置空
+                    if not pressure_level_item:
+                        pressure_level_item = QTableWidgetItem()
+                        table.setItem(row, 6, pressure_level_item)
+                    pressure_level_item.setText("")
+                    pressure_level_item.setTextAlignment(Qt.AlignCenter)
+            else:
+                # 如果没有当前压力等级或新标准下没有压力等级，置空
+                if not pressure_level_item:
+                    pressure_level_item = QTableWidgetItem()
+                    table.setItem(row, 6, pressure_level_item)
+                pressure_level_item.setText("")
+                pressure_level_item.setTextAlignment(Qt.AlignCenter)
+
+            # 验证法兰型式（第7列）
+            flange_type_item = table.item(row, 7)
+            current_flange_type = flange_type_item.text().strip() if flange_type_item else ""
+            current_pressure_level = pressure_level_item.text().strip() if pressure_level_item else ""
+            
+            if not current_pressure_level:
+                # 若压力等级为空，则法兰型式置空
+                if not flange_type_item:
+                    flange_type_item = QTableWidgetItem()
+                    table.setItem(row, 7, flange_type_item)
+                flange_type_item.setText("")
+                flange_type_item.setTextAlignment(Qt.AlignCenter)
+            elif current_flange_type:
+                # 如果压力等级不为空且法兰型式不为空，验证法兰型式在新标准下是否存在
+                from modules.guankoudingyi.funcs.funcs_pipe_data_in_out import validate_flange_form_by_database
+                validated_flange_type, _ = validate_flange_form_by_database(
+                    current_flange_type, 
+                    new_standard, 
+                    current_pressure_level, 
+                    "Class", 
+                    row
+                )
+                if not flange_type_item:
+                    flange_type_item = QTableWidgetItem()
+                    table.setItem(row, 7, flange_type_item)
+                flange_type_item.setText(validated_flange_type)
+                flange_type_item.setTextAlignment(Qt.AlignCenter)
+            else:
+                # 如果压力等级不为空但法兰型式为空，保持为空
+                if not flange_type_item:
+                    flange_type_item = QTableWidgetItem()
+                    table.setItem(row, 7, flange_type_item)
+                flange_type_item.setText("")
+                flange_type_item.setTextAlignment(Qt.AlignCenter)
+            
+            # 验证密封面型式（第8列）
+            seal_type_item = table.item(row, 8)
+            current_seal_type = seal_type_item.text().strip() if seal_type_item else ""
+            # 获取验证后的压力等级和法兰型式
+            validated_pressure_level = pressure_level_item.text().strip() if pressure_level_item else ""
+            validated_flange_type = flange_type_item.text().strip() if flange_type_item else ""
+            
+            if not validated_pressure_level or not validated_flange_type:
+                # 若压力等级为空或法兰型式为空，则密封面型式置空
+                if not seal_type_item:
+                    seal_type_item = QTableWidgetItem()
+                    table.setItem(row, 8, seal_type_item)
+                seal_type_item.setText("")
+                seal_type_item.setTextAlignment(Qt.AlignCenter)
+            elif current_seal_type:
+                # 如果压力等级和法兰型式都不为空且密封面型式不为空，验证密封面型式在新标准下是否存在
+                from modules.guankoudingyi.funcs.funcs_pipe_data_in_out import validate_sealing_face_form_by_database
+                validated_seal_type, _ = validate_sealing_face_form_by_database(
+                    current_seal_type,
+                    new_standard,
+                    validated_pressure_level,
+                    "Class",
+                    validated_flange_type,
+                    row
+                )
+                if not seal_type_item:
+                    seal_type_item = QTableWidgetItem()
+                    table.setItem(row, 8, seal_type_item)
+                seal_type_item.setText(validated_seal_type)
+                seal_type_item.setTextAlignment(Qt.AlignCenter)
+            else:
+                # 如果压力等级和法兰型式都不为空但密封面型式为空，保持为空
+                if not seal_type_item:
+                    seal_type_item = QTableWidgetItem()
+                    table.setItem(row, 8, seal_type_item)
+                seal_type_item.setText("")
+                seal_type_item.setTextAlignment(Qt.AlignCenter)
+
+            # 处理公称尺寸列（第4列）
+            # 小管口标准
+            small_pipe_standards = ["HG/T 20615-2009", "SH/T 3406-2022"]
+            # 大管口标准
+            large_pipe_standards = ["HG/T 20623-2009(A)", "HG/T 20623-2009(B)", "SH/T 3406-2022(A)", "SH/T 3406-2022(B)"]
+            
+            # 判断旧标准和新标准分别属于小管口还是大管口
+            old_is_small = current_standard in small_pipe_standards
+            old_is_large = current_standard in large_pipe_standards
+            new_is_small = new_standard in small_pipe_standards
+            new_is_large = new_standard in large_pipe_standards
+            
+            # 如果从小管口切换到大管口，或从大管口切换到小管口，则公称尺寸置空
+            # 其他情况（小管口之间切换、大管口之间切换）保留
+            nominal_size_item = table.item(row, 4)
+            if (old_is_small and new_is_large) or (old_is_large and new_is_small):
+                # 小管口与大管口之间的切换，置空
+                if not nominal_size_item:
+                    nominal_size_item = QTableWidgetItem()
+                    table.setItem(row, 4, nominal_size_item)
+                nominal_size_item.setText("")
+                nominal_size_item.setTextAlignment(Qt.AlignCenter)
+
             
 
             
@@ -460,6 +609,51 @@ def handle_class_flange_standard_change(stats_widget, row, new_standard, old_sta
             
     except Exception as e:
         print(f"[ERROR] 处理Class法兰标准切换失败: {str(e)}")
+
+"""查询指定标准下的所有压力等级"""
+def get_pressure_levels_by_standard(standard, pressure_type):
+    """
+    查询元件库"管口压力等级表"，获取指定标准和公称压力类型下的所有压力等级
+    :param standard: 法兰标准，如 'HG/T 20592-2009'
+    :param pressure_type: 压力类型，'Class' 或 'PN'
+    :return: 压力等级数值列表，如 [150, 300, 600] 或 [2.5, 6, 10]
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_connection(**db_config_1)
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+        cursor.execute("""
+            SELECT DISTINCT 压力等级
+            FROM 管口压力等级表
+            WHERE 标准=%s AND 公称压力类型=%s
+        """, (standard, pressure_type))
+        rows = cursor.fetchall()
+        if not rows:
+            return []
+
+        levels = []
+        for r in rows:
+            try:
+                if pressure_type == "PN":
+                    lv = float(r["压力等级"])
+                else:
+                    lv = int(r["压力等级"])
+                levels.append(lv)
+            except (ValueError, TypeError):
+                continue
+
+        levels.sort()
+        return levels
+
+    except Exception as e:
+        print(f"[ERROR] 查询压力等级失败: {str(e)}")
+        return []
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 """根据产品ID从产品设计活动库中获取焊端规格类型"""
 def get_welding_type_from_design_db(product_id):
@@ -569,7 +763,7 @@ def get_nominal_size_options(product_id, stats_widget=None, flange_standard=None
         
         # 根据法兰标准添加筛选条件
         if flange_standard:
-            if flange_standard in ["HG/T 20615-2009", "HG/T 20592-2009","SH/T 3406-2022"]:
+            if flange_standard in ["HG/T 20615-2009","SH/T 3406-2022"]:
                 # DN≤600 或 NPS≤24
                 if size_type == "DN":
                     base_sql += " AND CAST(`DN` AS UNSIGNED) <= 600"
@@ -908,8 +1102,10 @@ def handle_pipe_cell_click(stats_widget, row, column):
         version_belong_map = {
             ("NEN",): ["前端管箱平盖", "前端管箱圆筒", "后端管箱圆筒", "后端管箱平盖"],
             ("BEM",): ["前端管箱封头", "前端管箱圆筒", "后端管箱圆筒", "后端管箱封头"],
-            ("AES", "AEU"): ["管箱圆筒", "管箱平盖"],
-            ("BES", "BEU"): ["管箱圆筒", "管箱封头"]
+            ("AEM",): ["前端管箱平盖", "前端管箱圆筒", "后端管箱圆筒", "后端管箱封头"],
+            ("AES", "AEU","AKU"): ["管箱圆筒", "管箱平盖"],
+            ("BES", "BEU","BKU"): ["管箱圆筒", "管箱封头"],
+            
         }
 
         if product_type == "管壳式热交换器":
@@ -917,7 +1113,13 @@ def handle_pipe_cell_click(stats_widget, row, column):
             for versions, options in version_belong_map.items():
                 if product_version in versions:
                     # 找到匹配版本，判断管口功能
-                    if pipe_function in ["管程入口", "管程出口"]:
+                    if product_version in ["AKU", "BKU"] and pipe_function == "壳程入口":
+                        belong_options = ["壳程大端圆筒", "锥壳"]
+                    elif product_version in ["AKU", "BKU"] and pipe_function in [
+                        "壳程液位计1", "壳程液位计2", "壳程温度计"
+                    ]:
+                        belong_options = ["壳程大端圆筒", "壳程封头"]
+                    elif pipe_function in ["管程入口", "管程出口"]:
                         belong_options = options
                     else:
                         belong_options = get_belong_options(stats_widget.product_id)
@@ -1412,9 +1614,9 @@ def get_nominal_diameter(product_id, pipe_belong):
     # - 管箱 → 管程数值
     # - 壳体 / 外头盖 → 壳程数值
     try:
-        if "管箱" or "管板" in pipe_belong:
+        if ("管箱" in pipe_belong) or ("管板" in pipe_belong):
             param_field = '管程数值'
-        elif ("壳体" in pipe_belong) or ("外头盖" in pipe_belong):
+        elif ("壳体" in pipe_belong) or ("壳程" in pipe_belong) or ("外头盖" in pipe_belong)or ("锥壳" in pipe_belong):
             param_field = '壳程数值'
         else:
             return False, "无效的管口所属元件字段"
@@ -1439,6 +1641,29 @@ def get_nominal_diameter(product_id, pipe_belong):
     finally:
         cursor and cursor.close()
         conn and conn.close()
+
+"""获取锥壳长度，供轴向定位等逻辑复用"""
+def get_cone_length(product_id):
+    """
+    锥壳长度计算公式：
+    cone_length = (壳程公称直径 - 管程公称直径) * tan(30°)
+    :param product_id: 产品ID
+    :return: 锥壳长度（float，最小为0）
+    """
+    try:
+        # 分别获取管程与壳程公称直径（失败时按0处理）
+        tube_ok, tube_nominal_diameter = get_nominal_diameter(product_id, "管箱")
+        shell_ok, shell_nominal_diameter = get_nominal_diameter(product_id, "壳体")
+
+        if (not tube_ok) or (tube_nominal_diameter is None):
+            tube_nominal_diameter = 300
+        if (not shell_ok) or (shell_nominal_diameter is None):
+            shell_nominal_diameter = 400
+
+        cone_length = (shell_nominal_diameter - tube_nominal_diameter) / math.tan(math.radians(30))
+        return max(0, float(cone_length))
+    except Exception:
+        return 0
 
 """根据公称直径获取推荐的公称尺寸"""
 def get_recommended_nominal_size(nominal_diameter, pipe_belong):
@@ -2217,6 +2442,34 @@ def handle_pipe_cell_changed(stats_widget, row, column, product_id):
                 table.setItem(row, 11, target_item)
             target_item.setText("左基准线")
             target_item.setTextAlignment(Qt.AlignCenter)
+        elif new_value.endswith("平盖") and old_value.endswith("锥壳"):
+            target_item = table.item(row, 11)
+            if not target_item:
+                target_item = QTableWidgetItem()
+                table.setItem(row, 11, target_item)
+            target_item.setText("平盖中心线")
+            target_item.setTextAlignment(Qt.AlignCenter)
+        elif new_value.endswith("封头") and old_value.endswith("锥壳"):
+            target_item = table.item(row, 11)
+            if not target_item:
+                target_item = QTableWidgetItem()
+                table.setItem(row, 11, target_item)
+            target_item.setText("封头中心线")
+            target_item.setTextAlignment(Qt.AlignCenter)
+        elif new_value.endswith("锥壳") and old_value.endswith("封头"):
+            target_item = table.item(row, 11)
+            if not target_item:
+                target_item = QTableWidgetItem()
+                table.setItem(row, 11, target_item)
+            target_item.setText("左基准线")
+            target_item.setTextAlignment(Qt.AlignCenter)
+        elif new_value.endswith("锥壳") and old_value.endswith("平盖"):
+            target_item = table.item(row, 11)
+            if not target_item:
+                target_item = QTableWidgetItem()
+                table.setItem(row, 11, target_item)
+            target_item.setText("左基准线")
+            target_item.setTextAlignment(Qt.AlignCenter)
 
         # === 管板相关切换：从管板 → 圆筒/封头/平盖，以及 → 管板 的情况 ===
         else:
@@ -2269,6 +2522,38 @@ def handle_pipe_cell_changed(stats_widget, row, column, product_id):
 
         # 注意：后续修改管口所属元件时不再自动推荐公称尺寸
         # 只在初始化时推荐一次
+
+        # 切换为锥壳时：若当前公称尺寸超出锥壳长度，则重置为默认值10
+        if "锥壳" in new_value:
+            nominal_item = table.item(row, 4)
+            nominal_text = nominal_item.text().strip() if nominal_item else ""
+            if nominal_item and nominal_text:
+                current_product_id = getattr(stats_widget, "product_id", None)
+                cone_length = get_cone_length(current_product_id)
+                nominal_numeric = get_nominal_size_numeric_value(nominal_text, stats_widget=stats_widget)
+                if nominal_numeric is None:
+                    nominal_numeric = get_component_nominal_size_od(nominal_text, stats_widget=stats_widget)
+
+                if nominal_numeric is not None and nominal_numeric > cone_length:
+                    try:
+                        stats_widget.suppress_cell_change = True
+                        nominal_item.setText("10")
+                        model = table.model()
+                        if model is not None:
+                            model.setData(model.index(row, 4), "10")
+                    finally:
+                        stats_widget.suppress_cell_change = False
+
+                    pipe_code_item = table.item(row, 1)
+                    pipe_code_text = pipe_code_item.text().strip() if pipe_code_item else "当前"
+                    try:
+                        _set_tip(
+                            stats_widget,
+                            f"{pipe_code_text}切换为锥壳后，公称尺寸超出锥壳长度，已设为默认值10",
+                            "orange"
+                        )
+                    except Exception:
+                        pass
 
         # 更新旧值
         if not hasattr(stats_widget, 'pipe_belong_old_values'):
@@ -2393,7 +2678,7 @@ def _check_and_fix_axial_distance_for_rows(stats_widget, table, target_belong_ke
             # 壳体圆筒：设为"程序推荐"
             if "管箱圆筒" in pipe_belong or "外头盖圆筒" in pipe_belong or "管板" in pipe_belong:
                 default_value = "居中"
-            elif "壳体圆筒" in pipe_belong:
+            elif "壳体圆筒" in pipe_belong or "壳程大端圆筒" in pipe_belong or"锥壳"in pipe_belong:
                 default_value = "程序推荐"
             else:
                 # 其他类型，根据管口功能确定默认值
@@ -2420,6 +2705,47 @@ def _handle_nominal_size_changed(stats_widget, row, product_id):
     try:
         table = stats_widget.tableWidget_pipe
 
+        # 先检查当前行：锥壳管口公称尺寸不得大于锥壳长度
+        belong_item = table.item(row, 10)
+        nominal_item = table.item(row, 4)
+        if belong_item and nominal_item:
+            pipe_belong = belong_item.text().strip()
+            nominal_text = nominal_item.text().strip()
+            if pipe_belong and "锥壳" in pipe_belong and nominal_text:
+                current_product_id = product_id or getattr(stats_widget, "product_id", None)
+                cone_length = get_cone_length(current_product_id)
+                nominal_numeric = get_nominal_size_numeric_value(nominal_text, stats_widget=stats_widget)
+                # 兜底：若公称尺寸数值解析失败，尝试按接管实际外径/纯数字再解析一次
+                if nominal_numeric is None:
+                    nominal_numeric = get_component_nominal_size_od(nominal_text, stats_widget=stats_widget)
+                if nominal_numeric is None:
+                    cleaned = "".join(ch for ch in nominal_text if (ch.isdigit() or ch == "."))
+                    try:
+                        nominal_numeric = float(cleaned) if cleaned else None
+                    except Exception:
+                        nominal_numeric = None
+
+                if nominal_numeric is not None and nominal_numeric > cone_length:
+                    try:
+                        stats_widget.suppress_cell_change = True
+                        nominal_item.setText("10")
+                        model = table.model()
+                        if model is not None:
+                            model.setData(model.index(row, 4), "10")
+                    finally:
+                        stats_widget.suppress_cell_change = False
+
+                    pipe_code_item = table.item(row, 1)
+                    pipe_code_text = pipe_code_item.text().strip() if pipe_code_item else "当前"
+                    try:
+                        _set_tip(
+                            stats_widget,
+                            f"{pipe_code_text}管口公称尺寸已大于锥壳长度，已设为默认值，请重新选择",
+                            "orange"
+                        )
+                    except Exception:
+                        pass
+
         # ✅ 检查所有管口的轴向定位距离（不限制类型）
         # 收集所有不合法管口代号：管箱圆筒、外头盖圆筒、壳体圆筒
         all_offending_codes = []
@@ -2438,9 +2764,17 @@ def _handle_nominal_size_changed(stats_widget, row, product_id):
 
         # 检查壳体圆筒
         shell_offending_codes = _check_and_fix_axial_distance_for_rows(
-            stats_widget, table, ["壳体圆筒"], exclude_rows=None, product_id=product_id
+            stats_widget, table, ["壳体圆筒","大端圆筒"], exclude_rows=None, product_id=product_id
         )
         all_offending_codes.extend(shell_offending_codes)
+
+        conicalshell_offending_codes = _check_and_fix_axial_distance_for_rows(
+            stats_widget, table, ["锥壳"], exclude_rows=None, product_id=product_id
+        )
+        all_offending_codes.extend(conicalshell_offending_codes)
+
+
+
 
         # 统一提示：将所有超限的管口代号合并显示
         if all_offending_codes:
@@ -2716,6 +3050,7 @@ def get_working_pressure_by_belong(product_id, pipe_belong):
         cursor and cursor.close()
         conn and conn.close()
 
+
 """对最后获取到的压力等级提示进行判断，看提示值能否在该标准下取到"""
 def get_valid_pressure_level(standard, min_level, pressure_type):
 
@@ -2725,7 +3060,7 @@ def get_valid_pressure_level(standard, min_level, pressure_type):
     min_level = 'PN 2.5'
     pressure_type = 'PN' 或 'Class'
 
-    在元件库“管口压力等级表”中查找对应标准的所有压力等级，
+    在元件库"管口压力等级表"中查找对应标准的所有压力等级，
     若 min_level 不存在，则取比它大的最小值。
     """
     conn = get_connection(**db_config_1)
@@ -3156,18 +3491,67 @@ def validate_axial_position_distance(distance_text, nominal_size_text, stats_wid
 
             max_distance = max_pipe_od * 2.5 - 0.5 * current_pipe_od
         # 判断管口所属元件是否为壳体
-        elif pipe_belong and "壳体圆筒" in pipe_belong:
+        elif pipe_belong and "锥壳" in pipe_belong:
+            # 当前管口查元件库公称尺寸表转成接管实际外径od
+            current_pipe_od = get_component_nominal_size_od(nominal_size_text, stats_widget=stats_widget)
+            if current_pipe_od is None:
+                return False, "无法获取当前管口公称尺寸对应的接管实际外径数值"
+
+            # 分别获取管程、壳程公称直径（失败时按0处理）
+            tube_ok, tube_nominal_diameter = get_nominal_diameter(product_id, "管箱")
+            shell_ok, shell_nominal_diameter = get_nominal_diameter(product_id, "壳体")
+            if (not tube_ok) or (tube_nominal_diameter is None):
+                tube_nominal_diameter = 300
+            if (not shell_ok) or (shell_nominal_diameter is None):
+                shell_nominal_diameter = 400
+
+            # 锥壳长度 = (壳程公称直径 - 管程公称直径) * tan30°
+            cone_length = (shell_nominal_diameter - tube_nominal_diameter) / math.tan(math.radians(30))
+            if cone_length < 0:
+                cone_length = 0
+
+            # 锥壳上轴向定位限制
+            min_distance = round(0.5 * current_pipe_od, 2)
+
+            max_distance = round(cone_length - 0.5 * current_pipe_od, 2)
+            #print("tube_nominal_diameter",tube_nominal_diameter,"shell_nominal_diameter",shell_nominal_diameter,"cone_length",cone_length,"max_distance",max_distance)
+
+        # 判断管口所属元件是否为壳体
+        elif pipe_belong and ("壳体" in pipe_belong or "壳程大端圆筒" in pipe_belong):
             # 获取换热管长度
             tube_length = get_heat_exchanger_tube_length(stats_widget.product_id)
+            product_version = getattr(stats_widget, "current_product_version", "")
 
             # 当前管口查元件库公称尺寸表转成接管实际外径od
             current_pipe_od = get_component_nominal_size_od(nominal_size_text, stats_widget=stats_widget)
             if current_pipe_od is None:
                 return False, "无法获取当前管口公称尺寸对应的接管实际外径数值"
 
-            # 计算限定值：0.5*当前管口接管实际外径——换热管长度-0.5*当前管口接管实际外径
+            # 计算限定值：0.5*当前管口接管实际外径——换热管长度+1/2壳程公称直径-0.5*当前管口接管实际外径
             min_distance = round(0.5 * current_pipe_od, 2)
-            max_distance = round(tube_length - 0.5 * current_pipe_od, 2)
+            if product_version in [ "AEU", "BEU","AES", "BES", "AEM", "BEM", "NEN"]:
+                # 获取壳程公称直径数值（失败时按0处理）
+                nominal_ok, shell_lengh = get_nominal_diameter(product_id, "壳体")
+                if (not nominal_ok) or (shell_lengh is None):
+                    shell_lengh = 0
+                max_distance = round(tube_length + 1/2 * shell_lengh - 0.5 * current_pipe_od, 2)
+            elif product_version in ["AES", "BES"]:
+                # 大端圆筒的长度为总长-锥壳长度
+                tube_ok, tube_nominal_diameter = get_nominal_diameter(product_id, "管箱")
+                shell_ok, shell_nominal_diameter = get_nominal_diameter(product_id, "壳体")
+                if (not tube_ok) or (tube_nominal_diameter is None):
+                    tube_nominal_diameter = 300
+                if (not shell_ok) or (shell_nominal_diameter is None):
+                    shell_nominal_diameter = 400
+
+                # 锥壳长度 = (壳程公称直径 - 管程公称直径) * tan30°
+                cone_length = (shell_nominal_diameter - tube_nominal_diameter) / math.tan(math.radians(30))
+                if cone_length < 0:
+                    cone_length = 0
+                #总长
+                max_distance = round(tube_length+ 1/2 * shell_nominal_diameter-cone_length - 0.5 * current_pipe_od, 2)
+            else:
+                max_distance = round(tube_length - 0.5 * current_pipe_od, 2)
         else:
             # 其他类型暂时不做限制，直接通过验证
             return True, distance_value
@@ -3183,10 +3567,15 @@ def validate_axial_position_distance(distance_text, nominal_size_text, stats_wid
                 error_msg = f"{pipe_code_text}管口的轴向定位值需在{min_distance:.2f} mm至{max_distance:.2f} mm之间（最小值为{min_tip}，最大值为管板上最大管口对应接管实际外径的50倍）"
             elif pipe_belong and ("管箱" in pipe_belong or "外头盖圆筒" in pipe_belong):
                 error_msg = f"{pipe_code_text}管口的轴向定位值需在{min_distance:.2f} mm至{max_distance:.2f} mm之间（最小值为{pipe_code_text}管口接管实际外径的0.5倍，最大值为所有管口中公称尺寸最大管口对应接管实际外径的2.5倍减去{pipe_code_text}管口接管实际外径的0.5倍）"
-            elif pipe_belong and "壳体" in pipe_belong:
+            elif pipe_belong and ("壳体" in pipe_belong or "壳程大端圆筒" in pipe_belong):
                 # 获取换热管长度用于提示
                 tube_length = get_heat_exchanger_tube_length(product_id) if product_id else None
-                error_msg = f"{pipe_code_text}管口的轴向定位值需在{min_distance:.2f} mm至{max_distance:.2f} mm之间（最小值为{pipe_code_text}管口接管实际外径的0.5倍，最大值为壳体圆筒长度（换热管公称长度）减去{pipe_code_text}管口接管实际外径的0.5倍）"
+                if product_version in ["AKU", "BKU"]:
+                    error_msg = f"{pipe_code_text}管口的轴向定位值需在{min_distance:.2f} mm至{max_distance:.2f} mm之间（最小值为{pipe_code_text}管口接管实际外径的0.5倍，最大值为大端圆筒长度减去{pipe_code_text}管口接管实际外径的0.5倍）"
+                elif product_version in ["AEU", "BEU","AES", "BES", "AEM", "BEM", "NEN"]:
+                    error_msg = f"{pipe_code_text}管口的轴向定位值需在{min_distance:.2f} mm至{max_distance:.2f} mm之间（最小值为{pipe_code_text}管口接管实际外径的0.5倍，最大值为壳体圆筒长度（U型管直管段长度（换热管公称长度）加上1/2壳程公称直径长度）减去{pipe_code_text}管口接管实际外径的0.5倍）"
+            elif pipe_belong and "锥壳" in pipe_belong:
+                error_msg = f"{pipe_code_text}管口的轴向定位值需在{min_distance:.2f} mm至{max_distance:.2f} mm之间（最小值为{pipe_code_text}管口接管实际外径的0.5倍，最大值为锥壳长度减去{pipe_code_text}管口接管实际外径的0.5倍）"
             else:
                 error_msg = f"{pipe_code_text}管口的轴向定位值需在{min_distance:.2f} mm至{max_distance:.2f} mm之间"
             return False, error_msg

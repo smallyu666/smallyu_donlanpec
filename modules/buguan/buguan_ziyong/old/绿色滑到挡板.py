@@ -29,7 +29,7 @@
     #         }
     #         self.left_data_pd = pd.concat([self.left_data_pd, pd.DataFrame([new_row])], ignore_index=True)
 
-    #         if param_name == "壳体内直径 Di":
+    #         if param_name == "壳体内直径 Dis":
     #             try:
     #                 DL = float(param_value)
     #             except:
@@ -42,7 +42,7 @@
     #                 pass
 
     #     if DL is None:
-    #         QMessageBox.warning(self, "提示", "请先输入'壳体内直径 Di'参数。")
+    #         QMessageBox.warning(self, "提示", "请先输入'壳体内直径 Dis'参数。")
     #         return
     #     if do is None:
     #         QMessageBox.warning(self, "提示", "请先输入'换热管外径 do'参数。")
@@ -62,7 +62,7 @@
     #         "管程程数": ("LB_TubePassCount", None),
     #         "热交换器类型": ("LB_HEType", None),
     #         "公称直径 DN": ("LB_DN", None),
-    #         "壳体内直径 Di": ("LB_Di", None),
+    #         "壳体内直径 Dis": ("LB_Di", None),
     #         "布管限定圆 DL": ("LB_DL", None),
     #         "换热管孔需求数量": ("LB_TotalTubesCountNeed", None),
     #         "换热管外径 do": ("LB_TubeD", None),
@@ -72,7 +72,7 @@
     #         "热交换器公称（换热管）长度 L": ("LB_TubeLong", None),
     #         "换热管中心距 S": ("LB_S", None),
     #         "折流板切口方向": ("LB_BaffleDirection", {"水平上下": "1", "垂直左右": "2"}),
-    #         "折流板要求切口率 (%)": ("LB_BafflePerStr", None),
+    #         "折流板要求切口率": ("LB_BafflePerStr", None),
     #         "折流/支持板间距": ("LB_BaffleToODistance", None),
     #         "折流板外径": ("LB_BaffleOD", None),
     #         "分程隔板两侧相邻管中心距Sn（竖直）": ("LB_SNH", None),

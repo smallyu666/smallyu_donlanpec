@@ -271,13 +271,17 @@ def set_pipe_function_column_readonly(stats_widget):
             readonly_values = {"管程入口", "管程出口", "壳程入口", "壳程出口"}
         elif product_version in ["NEN"]:
             readonly_values = {"管程入口", "管程出口", "壳程入口", "壳程出口"}
-        elif product_version in ["BEM"]:
+        elif product_version in ["BEM","AEM"]:
             readonly_values = {"管程入口", "管程出口", "壳程入口", "壳程出口"}
+        elif product_version in ["AKU","BKU"]:
+            readonly_values = {"管程入口", "管程出口", "壳程入口", "壳程气相出口","壳程液相出口","壳程液位计1","壳程液位计2","壳程温度计"}
 
     # 所有类型的"管程入口"、"管程出口"的管口所属元件列可编辑
     belong_editable_functions = set()  # 变量名从belong_editable_for_nen改为更通用的名称
-    if product_type == "管壳式热交换器" and product_version in ["NEN", "BEM","AES","BES","AEU","BEU"]:
+    if product_type == "管壳式热交换器" and product_version in ["NEN", "BEM","AES","BES","AEU","BEU","AEM"]:
         belong_editable_functions = {"管程入口", "管程出口"}
+    elif product_type == "管壳式热交换器" and product_version in ["AKU","BKU"]:
+        belong_editable_functions ={"管程入口", "管程出口", "壳程入口","壳程液位计1","壳程液位计2","壳程温度计"}
 
     # 遍历表格行，同时设置管口功能列和管口所属元件列的只读状态
     func_col = 2  # 管口功能列
@@ -301,7 +305,7 @@ def set_pipe_function_column_readonly(stats_widget):
 
         # 设置管口所属元件列的只读状态
         if belong_item:
-            if product_type == "管壳式热交换器" and product_version in ["NEN", "BEM","AES","BES","AEU","BEU"]:  # 加入BEM
+            if product_type == "管壳式热交换器" and product_version in ["NEN", "BEM","AES","BES","AEU","BEU","AEM","AKU","BKU"]:  # 加入BEM
                 #管程入口、管程出口的管口所属元件列可编辑
                 if func_value in belong_editable_functions:  # 同步使用新的变量名
                     belong_item.setFlags(belong_item.flags() | Qt.ItemIsEditable)
@@ -719,7 +723,7 @@ def copy_pipe_row_data(stats_widget, source_row: int, product_id):
             if source_item:
                 text_to_set = source_item.text()
                 # 特殊规则：当“管口功能”为以下任一值时，复制后置空
-                if col_idx == 2 and text_to_set.strip() in {"管程出口", "管程入口", "壳程出口", "壳程入口","排气口","排液口"}:
+                if col_idx == 2 and text_to_set.strip() in {"管程出口", "管程入口", "壳程出口", "壳程入口","排气口","排液口","壳程气相出口","壳程液相出口","壳程液位计1","壳程液位计2","壳程温度计"}:
                     text_to_set = ""
 
                 new_item = QTableWidgetItem(text_to_set)
@@ -841,12 +845,10 @@ def set_default_pipe_cannot_be_deleted(stats_widget):
     if product_type == "管壳式热交换器":
         if product_version in ["AEU", "BEU"]:
             readonly_pipe_functions = {"管程入口", "管程出口", "壳程入口", "壳程出口"}
-        elif product_version in ["AES", "BES"]:
+        elif product_version in ["AES", "BES","NEN","AME","BEM"]:
             readonly_pipe_functions = {"管程入口", "管程出口", "壳程入口", "壳程出口", "排液口", "排气口"}
-        elif product_version in ["NEN"]:
-            readonly_pipe_functions = {"管程入口", "管程出口", "壳程入口", "壳程出口", "排液口", "排气口"}
-        elif product_version in ["BEM"]:
-            readonly_pipe_functions = {"管程入口", "管程出口", "壳程入口", "壳程出口", "排液口", "排气口"}
+        elif product_version in ["AKU","BKU"]:
+            readonly_pipe_functions = {"管程入口", "管程出口", "壳程入口", "壳程气相出口","壳程液相出口","壳程液位计1","壳程液位计2","壳程温度计"}
 
     # 保存到 stats_widget 实例属性中
     stats_widget.readonly_pipe_functions = readonly_pipe_functions

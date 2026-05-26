@@ -12,10 +12,11 @@ import threading
 import time
 import webbrowser
 
-from modules.Three3D.Three3D import show_dev_placeholder
+# from modules.Three3D.Three3D import show_dev_placeholder
 
 # 强烈建议先打开插件调试日志，便于定位（发布可注释掉）
 os.environ["QT_DEBUG_PLUGINS"] = "1"
+
 
 def _force_qt_paths():
     """
@@ -59,8 +60,12 @@ def _force_qt_paths():
     # 5) 若你使用 qt.conf，且用了 contents_directory='internal'，请确保内容是：
     # [Paths]
     # Plugins = internal/PyQt5/Qt/plugins
+
+
 import socket
 from PyQt5.QtWidgets import QApplication, QMessageBox
+
+
 def check_server_domain():
     """
     检查当前网络环境是否允许启动程序。
@@ -79,6 +84,7 @@ def check_server_domain():
         )
         sys.exit(1)
 
+
 _force_qt_paths()
 # check_server_domain()  # ✅ 加在这里,限定服务器
 
@@ -92,7 +98,9 @@ from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 from PyQt5.QtMultimediaWidgets import QVideoWidget
 from PyQt5.QtCore import QUrl, QTimer, QEvent
 from PyQt5.QtGui import QMouseEvent
-from PyQt5.QtWidgets import QWidget, QTabBar, QPushButton, QMessageBox, QDesktopWidget, QApplication, QLabel, \
+# 0522新修改：导航栏改为 QToolButton 后，用 QAbstractButton 查找/绑定按钮
+from PyQt5.QtWidgets import QWidget, QTabBar, QPushButton, QAbstractButton, QMessageBox, QDesktopWidget, QApplication, \
+    QLabel, \
     QSplashScreen
 
 # -------------------------------
@@ -101,7 +109,6 @@ from PyQt5.QtWidgets import QWidget, QTabBar, QPushButton, QMessageBox, QDesktop
 
 MYSQL_PROC = None  # 确保是全局引用，start_mysql() 已赋值
 MYSQL_LOG_THREADS = []  # 保存日志读取线程，用于退出时 join
-
 
 # -------------------------------
 # （可选）屏蔽 Windows 弹出错误窗口
@@ -112,21 +119,26 @@ ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x0002 | 0x0004 | 0x8000)
 # 运行环境与资源路径（onedir 友好，onefile 直接拦截）
 # ===============================
 import os, sys, shutil, tempfile
+
 APP_MAIN_WINDOW = None
 
 APP_NAME = "DongLanpec"  # 换成你的英文软件名
 USE_INPLACE_MYSQL = True  # ✅ 置 True：直接使用打包根目录下的 mysql；不拷贝到 LOCALAPPDATA
 
+
 def is_frozen():
     return getattr(sys, "frozen", False)
 
+
 def is_onefile():
     return hasattr(sys, "_MEIPASS")
+
 
 def resource_path(relative_path: str) -> str:
     # onefile: 资源位于 _MEIPASS；onedir/源码：按执行目录
     base = sys._MEIPASS if is_onefile() else (os.path.dirname(sys.executable) if is_frozen() else os.path.abspath("."))
     return os.path.join(base, relative_path)
+
 
 def app_persistent_home() -> str:
     base = os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
@@ -350,12 +362,14 @@ class _FontScaleController(QtCore.QObject):
         except Exception:
             pass
 
+
 def verify_mysql_datadir():
     """
     查询 @@datadir 并与我们指定的 MYSQL_DATA 做严格、健壮的比较。
     - 统一大小写、分隔符、真实路径
     - 去掉尾部斜杠
     """
+
     def _norm(p: str) -> str:
         # realpath -> 解析符号链接/相对；normpath -> 统一分隔符；normcase -> 大小写无关（Windows）
         # 最后去掉尾部斜杠，避免 '/','\\' 引起的误差
@@ -393,6 +407,7 @@ def verify_mysql_datadir():
         QtWidgets.QMessageBox.critical(None, "数据库实例校验失败", str(e))
         return False
 
+
 def ensure_mysql_persistent_home() -> str:
     """
     返回要使用的 MySQL 目录：
@@ -429,8 +444,8 @@ def app_base_dir() -> str:
         return os.path.dirname(sys.executable)
     return os.path.abspath(".")
 
-BASE_DIR = app_base_dir()  # 统一的包内基准路径（onedir/源码）
 
+BASE_DIR = app_base_dir()  # 统一的包内基准路径（onedir/源码）
 
 
 # ===== Onefile 运行直接拦截，防止从 _MEI 跑 MySQL（会导致退出清理弹窗）=====
@@ -452,9 +467,12 @@ class UserPage(QWidget):
         super().__init__()
         pass
 
+
 from modules.chanpinguanli.chanpinguanli_main import product_manager
 from modules.chanpinguanli.common_usage import get_mysql_connection_product, get_mysql_connection_active
 from modules.chanpinguanli.project_confirm_btn import show_confirm_dialog
+
+
 def on_product_id_changed(new_id):
     """当 product_manager 发射 product_id_changed 信号时调用"""
     import modules.chanpinguanli.bianl as bianl
@@ -525,6 +543,7 @@ def clear_current_product_info():
     else:
         print("[清除失败] 无法获取主窗口或标签控件")
 
+
 def get_product_form_from_db(product_id: str) -> str:
     if not product_id:
         print("[update] product_id为空,无法查询")
@@ -560,8 +579,13 @@ def get_product_form_from_db(product_id: str) -> str:
                 # 如果是 AEM，就返回 AEM
                 print(f"    ↳ 逻辑转换: 保持为 'AEM'")
                 return 'AEM'
+            # 0515新修改-NEN(Head)产品型式
+            if raw_product_form == 'NEN(Head)':
+                # 如果是 NEN(Head)，就返回 NEN(Head)
+                print(f"    ↳ 逻辑转换: 保持为 'NEN(Head)'")
+                return 'NEN(Head)'
             else:
-                # 如果是其他任何值 (AES, BES, 空值等)，都统一视为 'all'
+                # 如果是其他任何值 (AES, BES, NEN、NEN(Head)空值等)，都统一视为 'all'
                 print(f"    ↳ 逻辑转换: 将 '{raw_product_form}' 视为 'all'")
                 return 'all'
         else:
@@ -585,32 +609,33 @@ def check_product_definition_status(product_id: str) -> bool:
     if not product_id:
         print("[check_product_definition] product_id为空")
         return False
-    
+
     import modules.chanpinguanli.bianl as bianl
-    
+
     # 查找当前产品ID对应的行
     current_row = None
     for row, status_dict in bianl.product_table_row_status.items():
         if isinstance(status_dict, dict) and status_dict.get("product_id") == product_id:
             current_row = row
             break
-    
+
     if current_row is None:
         print(f"[check_product_definition] 未找到产品ID {product_id} 对应的行")
         return False
-    
+
     # 获取该行的定义状态
     definition_status = bianl.product_table_row_status.get(current_row, {}).get("definition_status", "start")
     print(f"[check_product_definition] 产品ID {product_id} 的定义状态: {definition_status}")
-    
+
     # 只有状态为 "view" 时才认为已定义
     is_defined = (definition_status == "view")
     print(f"[check_product_definition] 产品ID {product_id} 是否已定义: {is_defined}")
-    
+
     return is_defined
 
 
 product_manager.product_id_changed.connect(on_product_id_changed)
+
 
 class OutputDialog(QtWidgets.QDialog):
     def __init__(self, title, parent=None):
@@ -645,7 +670,9 @@ class OutputDialog(QtWidgets.QDialog):
         for cb in self.checkboxes:
             cb.setChecked(checked)
 
+
 from PyQt5 import QtWidgets, QtCore, QtGui
+
 
 class TipHistoryDialog(QtWidgets.QDialog):
     def __init__(self, text, parent=None):
@@ -684,6 +711,7 @@ class tiaojianPage(QWidget):
         super().__init__()
         uic.loadUi(resource_path("modules/condition_input/viewer.ui"), self)
 
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -691,8 +719,8 @@ class MainWindow(QtWidgets.QMainWindow):
         global APP_MAIN_WINDOW
         APP_MAIN_WINDOW = self
 
-        uic.loadUi(resource_path("main_viewer333.ui"), self)
-
+        # uic.loadUi(resource_path("main_viewer333.ui"), self)
+        uic.loadUi(resource_path("main_viewer333_new.ui"), self)
 
         # ✅ 设置界面打开大小为屏幕的 80%
         screen = QDesktopWidget().screenGeometry()
@@ -768,14 +796,14 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.login_image:
             self.login_image.mousePressEvent = self.handle_image_click
 
-        self.current_product_id = ""      # 当前在产品管理界面点到的
+        self.current_product_id = ""  # 当前在产品管理界面点到的
         self.last_confirmed_product_id = None  # 已经和模块绑定的ID
 
         self.page_buttons = {
             "btn_project": ("项目管理", lambda: self.get_or_create_stats()),
-            "btn_condition": ("条件输入", lambda: DesignConditionInputViewer(line_tip=self.line_tip)),#已修改
-            "btn_material": ("元件定义", lambda: DesignParameterDefineInputerViewer(line_tip=self.line_tip)),#已修改
-            "btn_pipe": ("管口及附件定义", lambda: Stats(line_tip=self.line_tip)),#修改
+            "btn_condition": ("条件输入", lambda: DesignConditionInputViewer(line_tip=self.line_tip)),  # 已修改
+            "btn_material": ("元件定义", lambda: DesignParameterDefineInputerViewer(line_tip=self.line_tip)),  # 已修改
+            "btn_pipe": ("管口及附件定义", lambda: Stats(line_tip=self.line_tip)),  # 修改
             "btn_pipeDesign": ("管束设计", lambda: TubeLayoutEditor(line_tip=self.line_tip)),
             "btn_2D": ("图纸绘制", lambda: TwoDGeneratorTab()),
             "btn_docs": ("文本说明生成", lambda: DocumentGenerationDialog()),
@@ -786,9 +814,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._skip_first_gasket_check = False
 
-
         for btn_name, (title, widget_class) in self.page_buttons.items():
-            btn = self.findChild(QPushButton, btn_name)
+            btn = self.findChild(QAbstractButton, btn_name)
             if btn:
                 btn.clicked.connect(lambda _, t=title, w=widget_class: self.safe_open_tab(t, w))
                 btn.setEnabled(False)  # 初始禁用
@@ -797,13 +824,13 @@ class MainWindow(QtWidgets.QMainWindow):
     def build_product_switch_message(self, product_name, device_tag, product_number):
         """构建产品切换确认消息，只显示非空字段"""
         parts = [f"设备名称为 {product_name} "]
-        
+
         if device_tag and device_tag.strip():
             parts.append(f"设备位号为 {device_tag} ")
-        
+
         if product_number and product_number.strip():
             parts.append(f"产品编号为 {product_number} ")
-        
+
         return f"是否切换为{', '.join(parts)}的产品？"
 
     def select_product(self, product_id):
@@ -830,6 +857,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._flask_started = True
         # 打开浏览器访问 Flask 页面
         webbrowser.open("http://127.0.0.1:5000/")
+
     def show_tip_history(self, event):
         if not self.line_tip:
             return
@@ -859,8 +887,48 @@ class MainWindow(QtWidgets.QMainWindow):
         # 偏好设置 submenu（objectName 在 ui 里叫 "menu"）
         prefs_menu = self.findChild(QtWidgets.QMenu, "menu")
         if prefs_menu is None:
-            # 兜底：直接挂到菜单栏
-            prefs_menu = self.menuBar().addMenu("偏好设置")
+            # 如果没有找到 "menu"（在新 UI 中），尝试寻找 btn_config 按钮并把菜单挂在它下面
+            btn_config = self.findChild(QtWidgets.QToolButton, "btn_config")
+            if btn_config:
+                config_menu = btn_config.menu()
+                if config_menu is None:
+                    config_menu = QtWidgets.QMenu(self)
+                    btn_config.setMenu(config_menu)
+                    # 点击按钮时立刻弹出下拉菜单
+                    btn_config.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+                    
+                    # 0524新修改-菜单的小箭头为向下箭头
+                    config_menu.setStyleSheet("QMenu::right-arrow { image: url(icons/arrow_down.png); }")
+
+                # 把“预定义”加到配置菜单
+                act_18 = self.findChild(QtWidgets.QAction, "action_18")
+                if act_18:
+                    config_menu.addAction(act_18)
+
+                # 创建子菜单“偏好设置”
+                prefs_menu = config_menu.addMenu("偏好设置")
+                prefs_menu.setObjectName("menu")
+
+                # 把原来在偏好设置里的 action 加进去：界面、快捷键、存储路径
+                for act_name in ["action_15", "action_16", "action_17"]:
+                    act = self.findChild(QtWidgets.QAction, act_name)
+                    if act:
+                        prefs_menu.addAction(act)
+                prefs_menu.addSeparator()
+
+                # 0524新修改：创建子菜单“帮助”
+                help_menu = config_menu.addMenu("帮助")
+                # 放入指定的三个 action
+                for act_name in ["action_help_doc", "action_13", "action_12"]:
+                    act = self.findChild(QtWidgets.QAction, act_name)
+                    if act:
+                        # 恢复原有的文本（之前被改成了“帮助”）
+                        if act_name == "action_help_doc":
+                            act.setText("查看软件使用文档")
+                        help_menu.addAction(act)
+            else:
+                # 兜底：直接挂到菜单栏
+                prefs_menu = self.menuBar().addMenu("偏好设置")
 
         font_menu = prefs_menu.addMenu("字体大小")
 
@@ -894,8 +962,7 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             print(f"[font menu] custom failed: {e}")
 
-
-# 新增 -- 在本地浏览器中打开
+    # 新增 -- 在本地浏览器中打开
     def show_help_document(self):
         """在系统默认浏览器中打开软件使用文档"""
         # 本地文件方式
@@ -911,20 +978,157 @@ class MainWindow(QtWidgets.QMainWindow):
         }
         print("用户选择：", selections)
 
-
     def get_or_create_stats(self):
         if self.stats_page_instance is None:
             self.stats_page_instance = cpgl_Stats(line_tip=self.line_tip)
 
         return self.stats_page_instance
 
+    # 4，12新修改--本地文件夹误删1共7
+    def apply_readonly_to_widget_tree(self, root, readonly: bool):
+        """业务界面只读：输入框、表格、表内控件、按钮等。"""
+        if root is None:
+            return
+        from PyQt5.QtWidgets import (
+            QAbstractItemView,
+            QAbstractSpinBox,
+            QComboBox,
+            QDateEdit,
+            QTimeEdit,
+            QLineEdit,
+            QTextEdit,
+            QPlainTextEdit,
+            QPushButton,
+            QToolButton,
+            QTableWidget,
+            QTreeWidget,
+            QCheckBox,
+            QRadioButton,
+        )
+        from PyQt5.QtCore import Qt
+
+        edit_triggers_default = (
+                QAbstractItemView.DoubleClicked
+                | QAbstractItemView.SelectedClicked
+                | QAbstractItemView.EditKeyPressed
+        )
+
+        for w in root.findChildren(QLineEdit):
+            w.setReadOnly(readonly)
+        for w in root.findChildren(QTextEdit):
+            w.setReadOnly(readonly)
+        for w in root.findChildren(QPlainTextEdit):
+            w.setReadOnly(readonly)
+        for w in root.findChildren(QComboBox):
+            w.setEnabled(not readonly)
+        for w in root.findChildren(QAbstractSpinBox):
+            w.setEnabled(not readonly)
+        for w in root.findChildren(QDateEdit):
+            w.setEnabled(not readonly)
+        for w in root.findChildren(QTimeEdit):
+            w.setEnabled(not readonly)
+        for w in root.findChildren(QPushButton):
+            w.setEnabled(not readonly)
+        for w in root.findChildren(QToolButton):
+            w.setEnabled(not readonly)
+        for w in root.findChildren(QCheckBox):
+            w.setEnabled(not readonly)
+        # 0526新修改-模块化设计禁用
+        for w in root.findChildren(QRadioButton):
+            if w.objectName() == "radio_modular_design":
+                w.setEnabled(False)
+            else:
+                w.setEnabled(not readonly)
+
+
+
+        for w in root.findChildren(QTableWidget):
+            if readonly:
+                w.setEditTriggers(QAbstractItemView.NoEditTriggers)
+                for r in range(w.rowCount()):
+                    for c in range(w.columnCount()):
+                        it = w.item(r, c)
+                        if it:
+                            it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+                        cw = w.cellWidget(r, c)
+                        if cw is not None:
+                            cw.setEnabled(False)
+            else:
+                w.setEditTriggers(edit_triggers_default)
+                for r in range(w.rowCount()):
+                    for c in range(w.columnCount()):
+                        cw = w.cellWidget(r, c)
+                        if cw is not None:
+                            cw.setEnabled(True)
+
+        for w in root.findChildren(QTreeWidget):
+            if readonly:
+                w.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            else:
+                w.setEditTriggers(edit_triggers_default)
+
+    # 0506新修改-项目管理只读区域设置
+    def _apply_readonly_unlock_project_management_product_areas(self):
+        """
+        本地文件缺失解除锁定时：只对「产品信息 / 产品定义 / 工作信息」三个分组执行解锁，
+        不刷项目信息整页，避免误把查看态项目信息行编辑设为可写。
+        产品定义组内含「类型」「型式」下拉：子树刷前后对其 isEnabled / 样式 / minWidth 打快照并恢复。
+        """
+        import modules.chanpinguanli.bianl as bianl
+
+        def _snap_combo(c):
+            if c is None:
+                return None
+            return (c.isEnabled(), c.styleSheet(), c.minimumWidth())
+
+        def _restore_combo(c, snap):
+            if c is None or snap is None:
+                return
+            en, stylesheet, minw = snap
+            c.setEnabled(en)
+            c.setStyleSheet(stylesheet)
+            c.setMinimumWidth(minw)
+
+        try:
+            t_combo = getattr(bianl, "product_type_combo", None)
+            f_combo = getattr(bianl, "product_form_combo", None)
+            snap_t = _snap_combo(t_combo)
+            snap_f = _snap_combo(f_combo)
+
+            for attr in ("product_info_group", "product_definition_group", "work_information_group"):
+                box = getattr(bianl, attr, None)
+                if box is not None:
+                    self.apply_readonly_to_widget_tree(box, False)
+
+            _restore_combo(t_combo, snap_t)
+            _restore_combo(f_combo, snap_f)
+        except Exception as e:
+            print(f"[_apply_readonly_unlock_project_management_product_areas] {e}")
+
+    # 4，12新修改--本地文件夹误删2共7
+    def refresh_all_tabs_readonly_state(self):
+        import modules.chanpinguanli.bianl as bianl
+
+        ro = getattr(bianl, "product_local_files_missing_readonly", False)
+        for i in range(self.tab_widget.count()):
+            title = self.tab_widget.tabText(i)
+            w = self.tab_widget.widget(i)
+            if not w:
+                continue
+            if title in ("", "项目管理"):
+                # 0506新修改-项目管理只读区域设置
+                self._apply_readonly_unlock_project_management_product_areas()
+            else:
+                self.apply_readonly_to_widget_tree(w, ro)
+
     def safe_open_tab(self, title, widget_class):
         """安全地打开tab，处理widget创建失败的情况"""
         import modules.chanpinguanli.bianl as bianl
-        
+
         # 新增：需要检查产品定义的模块（除了项目管理外的所有模块）
-        definition_required_tabs = {"条件输入", "元件定义", "管口及附件定义", "管束设计", "设计运算", "图纸绘制", "文本说明生成", "模型创建"}
-        
+        definition_required_tabs = {"条件输入", "元件定义", "管口及附件定义", "管束设计", "设计运算", "图纸绘制",
+                                    "文本说明生成", "模型创建"}
+
         # 新增：检查产品定义状态
         if title in definition_required_tabs:
             # 首先使用现有的检查函数检查项目和产品是否存在
@@ -934,7 +1138,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 # 如果项目或产品不存在，显示原有的提示信息
                 QMessageBox.information(self, "提示", msg)
                 return
-            
+
             # 如果项目和产品都存在，再检查是否点击了空白行
             current_product_id = getattr(bianl, "current_product_id", None)
             if not current_product_id or current_product_id is None:
@@ -948,7 +1152,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     # 产品未定义，显示提示弹窗并阻止打开
                     QMessageBox.information(self, "提示", "产品还未定义，请先定义！")
                     return
-        
+
         try:
             widget = widget_class()
             self.open_tab(title, widget)
@@ -964,9 +1168,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def handle_3D_click(self, event):
         pass
 
-# 处理图片点击事件
+    # 处理图片点击事件
     def handle_image_click(self, event):
         self.show_login_dialog()
+
     def show_login_dialog(self):
         if self.is_logged_in:
             # 如果已登录，点击跳转到用户页面
@@ -991,10 +1196,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
                 # 3) 启用所有功能按钮
                 for btn_name in self.page_buttons:
-                    btn = self.findChild(QPushButton, btn_name)
+                    btn = self.findChild(QAbstractButton, btn_name)
                     if btn:
                         btn.setEnabled(True)
-    #新增
+
+    # 新增
 
     def check_prerequisites_in_db(self, product_id):
         import traceback
@@ -1103,9 +1309,10 @@ class MainWindow(QtWidgets.QMainWindow):
         restricted_tabs = {"设计运算", "图纸绘制", "文本说明生成", "模型创建"}
         # 可以从条件输入切换的模块 #1106新修改（新增项目管理）
         switchable_tabs = {"项目管理", "元件定义", "管口及附件定义", "管束设计"}
-        
+
         # 新增：需要检查产品定义的模块（除了项目管理外的所有模块）
-        definition_required_tabs = {"条件输入", "元件定义", "管口及附件定义", "管束设计", "设计运算", "图纸绘制", "文本说明生成", "模型创建"}
+        definition_required_tabs = {"条件输入", "元件定义", "管口及附件定义", "管束设计", "设计运算", "图纸绘制",
+                                    "文本说明生成", "模型创建"}
 
         # 当前已打开的所有产品相关模块 tab（包括关键模块和其他产品相关模块）
         opened_product_tabs = [
@@ -1125,7 +1332,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 # 如果项目或产品不存在，显示原有的提示信息
                 QMessageBox.information(self, "提示", msg)
                 return
-            
+
             # 如果项目和产品都存在，再检查是否点击了空白行
             if not new_product_id or new_product_id is None:
                 # 当前未选中产品（空白行），显示提示弹窗并阻止打开
@@ -1173,7 +1380,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
             else:
                 # 用户确认 → 关闭已打开的所有产品相关模块 tab（不只关键模块）
-                all_product_tabs = {"条件输入", "元件定义", "管口及附件定义", "管束设计", "设计运算", "图纸绘制", "文本说明生成", "模型创建"}
+                all_product_tabs = {"条件输入", "元件定义", "管口及附件定义", "管束设计", "设计运算", "图纸绘制",
+                                    "文本说明生成", "模型创建"}
                 for i in reversed(range(self.tab_widget.count())):
                     tab_text = self.tab_widget.tabText(i)
                     if tab_text in all_product_tabs:
@@ -1229,17 +1437,22 @@ class MainWindow(QtWidgets.QMainWindow):
                 if not can_proceed:
                     return  # 如果不能继续，则阻止切换
 
-# lxy1012
+        # lxy1012
         # 检查是否已打开相同界面
         for i in range(self.tab_widget.count()):
             if self.tab_widget.tabText(i) == title:
                 self.tab_widget.setCurrentIndex(i)
+                # 4，12新修改--本地文件夹误删3共7
+                self._last_tab_index = i
+                self.refresh_all_tabs_readonly_state()
                 return
 
         # 添加新 tab
         idx = self.tab_widget.addTab(widget, title)
         self.tab_widget.setCurrentIndex(idx)
         self._last_tab_index = idx
+        # 4，12新修改--本地文件夹误删4共7
+        self.refresh_all_tabs_readonly_state()
 
     # === on_tab_changed 改进版 ===
     def on_tab_changed(self, index):
@@ -1252,7 +1465,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # 判断切换的标签是否是“关键模块”以及是否完成必要的前置步骤
         restricted_tabs = {"设计运算", "图纸绘制", "文本说明生成", "模型创建"}
-        switchable_tabs = {"项目管理", "元件定义", "管口及附件定义", "管束设计"}#1106新修改 新增项目管理
+        switchable_tabs = {"项目管理", "元件定义", "管口及附件定义", "管束设计"}  # 1106新修改 新增项目管理
         critical_tabs = {"条件输入", "元件定义", "管口及附件定义", "管束设计"}
 
         last_index = getattr(self, "_last_tab_index", None)
@@ -1307,7 +1520,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._product_switch_confirmed_in_event_filter:
             self._product_switch_confirmed_in_event_filter = False  # 重置标志
             # 直接执行切换逻辑，不再弹窗
-            product_specific_tabs = {"条件输入", "元件定义", "管口及附件定义", "管束设计", "设计运算", "图纸绘制", "文本说明生成", "模型创建"}
+            product_specific_tabs = {"条件输入", "元件定义", "管口及附件定义", "管束设计", "设计运算", "图纸绘制",
+                                     "文本说明生成", "模型创建"}
             tabs_to_close_indices = [
                 i for i in range(self.tab_widget.count())
                 if self.tab_widget.tabText(i) in product_specific_tabs
@@ -1332,10 +1546,15 @@ class MainWindow(QtWidgets.QMainWindow):
                     self.tab_widget.setCurrentIndex(new_idx)
                     self._last_tab_index = new_idx
                     print(f"[DEBUG] 已打开新产品界面: {ctitle}")
+                    # 4，12新修改--本地文件夹误删5共7
+                    try:
+                        self.refresh_all_tabs_readonly_state()
+                    except Exception:
+                        pass
                 # 重新连接信号
                 self.tab_widget.currentChanged.connect(self.on_tab_changed)
                 return
-        
+
         if self.last_confirmed_product_id and self.last_confirmed_product_id != bianl.current_product_id:
             product_name = device_tag = product_number = ""
             try:
@@ -1357,11 +1576,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 if "cursor" in locals(): cursor.close()
                 if "conn" in locals(): conn.close()
 
-
-            #在这里开始修改
+            # 在这里开始修改
 
             # 检查是否存在需要关闭的旧产品标签页（所有与产品相关的模块）
-            product_specific_tabs = {"条件输入", "元件定义", "管口及附件定义", "管束设计", "设计运算", "图纸绘制", "文本说明生成", "模型创建"}
+            product_specific_tabs = {"条件输入", "元件定义", "管口及附件定义", "管束设计", "设计运算", "图纸绘制",
+                                     "文本说明生成", "模型创建"}
             tabs_to_close_indices = [
                 i for i in range(self.tab_widget.count())
                 if self.tab_widget.tabText(i) in product_specific_tabs
@@ -1379,7 +1598,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     self.tab_widget.setCurrentIndex(last_index)
                     self.tab_widget.blockSignals(False)
                     return
-                
+
                 # 如果项目和产品都存在，再检查是否点击了空白行
                 if not bianl.current_product_id or bianl.current_product_id is None:
                     # 当前未选中产品（空白行），显示提示弹窗并阻止切换
@@ -1428,6 +1647,11 @@ class MainWindow(QtWidgets.QMainWindow):
                         self.tab_widget.setCurrentIndex(new_idx)
                         self._last_tab_index = new_idx  # 更新 last_index
                         print(f"[DEBUG] 已打开新产品界面: {ctitle}")
+                        # 4，12新修改--本地文件夹误删6共7
+                        try:
+                            self.refresh_all_tabs_readonly_state()
+                        except Exception:
+                            pass
                     else:
                         print(f"[ERROR] 找不到要创建的界面: {ctitle}")
 
@@ -1459,6 +1683,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 print(
                     f"[DEBUG][on_tab_changed] 无需关闭界面，直接同步 last_confirmed → {self.last_confirmed_product_id}")
         self._last_tab_index = index
+        # 4，12新修改--本地文件夹误删7共7
+        try:
+            self.refresh_all_tabs_readonly_state()
+        except Exception as _ro_e:
+            print(f"[on_tab_changed] refresh_all_tabs_readonly_state: {_ro_e}")
         # 1107新修改
         if target_tab_title != "管口及附件定义":
             self._tip_timer.start(5000)  # 设置定时器，用于显示提示信息
@@ -1480,28 +1709,29 @@ class MainWindow(QtWidgets.QMainWindow):
                 clicked_index = self.tab_widget.tabBar().tabAt(mouse_event.pos())
                 if clicked_index >= 0 and clicked_index < self.tab_widget.count():
                     current_index = self.tab_widget.currentIndex()
-                    
+
                     # 如果点击的是当前tab，不需要检查
                     if clicked_index == current_index:
                         return super().eventFilter(obj, event)
-                    
+
                     current_tab_text = self.tab_widget.tabText(current_index)
                     target_tab_text = self.tab_widget.tabText(clicked_index)
-                    
+
                     import modules.chanpinguanli.bianl as bianl
-                    
+
                     # 检查是否需要切换产品（在切换之前检查）
                     # 如果当前选中的产品ID和已确认的产品ID不同，且目标tab是产品相关的模块，则需要切换产品
-                    product_specific_tabs = {"条件输入", "元件定义", "管口及附件定义", "管束设计", "设计运算", "图纸绘制", "文本说明生成", "模型创建"}
-                    if (self.last_confirmed_product_id and 
-                        self.last_confirmed_product_id != bianl.current_product_id and
-                        target_tab_text in product_specific_tabs):
+                    product_specific_tabs = {"条件输入", "元件定义", "管口及附件定义", "管束设计", "设计运算",
+                                             "图纸绘制", "文本说明生成", "模型创建"}
+                    if (self.last_confirmed_product_id and
+                            self.last_confirmed_product_id != bianl.current_product_id and
+                            target_tab_text in product_specific_tabs):
                         # 检查是否存在需要关闭的旧产品标签页
                         tabs_to_close_indices = [
                             i for i in range(self.tab_widget.count())
                             if self.tab_widget.tabText(i) in product_specific_tabs
                         ]
-                        
+
                         if tabs_to_close_indices:
                             # 新增：检查新产品是否已定义（与 on_tab_changed 中的逻辑保持一致）
                             # 首先使用现有的检查函数检查项目和产品是否存在
@@ -1514,7 +1744,7 @@ class MainWindow(QtWidgets.QMainWindow):
                                 # 同步产品ID到 product_manager，更新UI显示
                                 product_manager.update_product_id(self.last_confirmed_product_id)
                                 return True  # 阻止切换
-                            
+
                             # 如果项目和产品都存在，再检查是否点击了空白行
                             if not bianl.current_product_id or bianl.current_product_id is None:
                                 # 当前未选中产品（空白行），显示提示弹窗并阻止切换
@@ -1523,7 +1753,7 @@ class MainWindow(QtWidgets.QMainWindow):
                                 # 同步产品ID到 product_manager，更新UI显示
                                 product_manager.update_product_id(self.last_confirmed_product_id)
                                 return True  # 阻止切换
-                            
+
                             # 检查新产品是否已定义
                             is_new_product_defined = check_product_definition_status(bianl.current_product_id)
                             if not is_new_product_defined:
@@ -1533,7 +1763,7 @@ class MainWindow(QtWidgets.QMainWindow):
                                 # 同步产品ID到 product_manager，更新UI显示
                                 product_manager.update_product_id(self.last_confirmed_product_id)
                                 return True  # 阻止切换
-                            
+
                             # 获取新产品信息
                             product_name = device_tag = product_number = ""
                             try:
@@ -1555,7 +1785,7 @@ class MainWindow(QtWidgets.QMainWindow):
                             finally:
                                 if "cursor" in locals(): cursor.close()
                                 if "conn" in locals(): conn.close()
-                            
+
                             # 弹窗确认切换# 1112新修改-切换产品提示优化
                             msg = self.build_product_switch_message(product_name, device_tag, product_number)
                             if not show_confirm_dialog(self, "切换产品确认", msg):
@@ -1566,7 +1796,7 @@ class MainWindow(QtWidgets.QMainWindow):
                                 return True  # 阻止切换
                             # 用户确认，设置标志，允许切换（后续逻辑在 on_tab_changed 中处理）
                             self._product_switch_confirmed_in_event_filter = True
-                    
+
                     # 检查是否从条件输入切换到其他模块（包括项目管理）
                     # 需要检查的模块：所有可以从条件输入切换的模块
                     switchable_tabs = {"项目管理", "元件定义", "管口及附件定义", "管束设计"}
@@ -1581,7 +1811,7 @@ class MainWindow(QtWidgets.QMainWindow):
                                 # 如果不能继续，阻止切换
                                 # 返回True表示事件已被处理，阻止默认行为（tab切换）
                                 return True
-                    
+
         # 其他事件正常处理
         return super().eventFilter(obj, event)
 
@@ -1836,7 +2066,6 @@ class MainWindow(QtWidgets.QMainWindow):
             subprocess.Popen(stop_bat, shell=True)
             os.remove(flag_path)
 
-
         # 2) UI/资源：无论写库成功与否，都要清理句柄，避免目录被占
         try:
             # 停止多媒体
@@ -1897,13 +2126,13 @@ import socket
 import subprocess
 from PyQt5 import QtWidgets, QtCore
 
-
 # 放在你后面的 import 之后亦可；关键是这三项改为基于 BASE_DIR
 MYSQL_HOME = ensure_mysql_persistent_home()
-MYSQL_BIN  = os.path.join(MYSQL_HOME, "bin", "mysqld.exe")
+MYSQL_BIN = os.path.join(MYSQL_HOME, "bin", "mysqld.exe")
 MYSQL_DATA = os.path.join(MYSQL_HOME, "data")
-LOG_PATH   = os.path.join(app_persistent_home(), "mysql_start.log")
+LOG_PATH = os.path.join(app_persistent_home(), "mysql_start.log")
 MYSQL_PORT = 3306
+
 
 def _global_cleanup():
     # 1) 停 MySQL
@@ -1933,7 +2162,10 @@ def _global_cleanup():
     except Exception:
         pass
 
+
 atexit.register(_global_cleanup)
+
+
 # -------------------------------
 # 端口检测 & 关闭占用
 # -------------------------------
@@ -1948,12 +2180,14 @@ def find_pid_by_port(port=MYSQL_PORT):
         return None
     return None
 
+
 def stop_process_by_pid(pid):
     try:
         subprocess.run(f"taskkill /PID {pid} /F", shell=True, check=True)
         print(f"[INFO] 成功关闭 PID={pid} 占用的端口")
     except Exception as e:
         print(f"[WARN] 关闭 PID={pid} 失败: {e}")
+
 
 def ensure_port_free(port=MYSQL_PORT):
     pid = find_pid_by_port(port)
@@ -1963,6 +2197,7 @@ def ensure_port_free(port=MYSQL_PORT):
         time.sleep(1)
     else:
         print(f"[INFO] 端口 {port} 未被占用")
+
 
 # -------------------------------
 # 检测 MySQL 是否启动
@@ -1974,11 +2209,13 @@ def is_mysql_running(host="localhost", port=MYSQL_PORT, timeout=1):
     except (ConnectionRefusedError, socket.timeout, OSError):
         return False
 
+
 # -------------------------------
 # 初始化 MySQL 数据目录
 # -------------------------------
 import threading
 import io
+
 
 def _log_append(text: str):
     try:
@@ -1987,6 +2224,7 @@ def _log_append(text: str):
             f.write(text)
     except Exception:
         pass
+
 
 def _stream_reader(pipe, capture_list, prefix=""):
     try:
@@ -2005,7 +2243,6 @@ def _stream_reader(pipe, capture_list, prefix=""):
             pipe.close()
         except Exception:
             pass
-
 
 
 def initialize_mysql_data():
@@ -2028,8 +2265,11 @@ def initialize_mysql_data():
             print("[INFO] MySQL 数据目录已存在（包含关键文件），无需初始化")
         else:
             print("[WARN] data 目录存在但缺少关键文件，建议备份后重新初始化或检查日志")
+
+
 # 放在 import 后、start_mysql 之前
 BIN_DIR = os.path.dirname(MYSQL_BIN)
+
 
 def _pin_mysql_dll_dir():
     """
@@ -2045,7 +2285,9 @@ def _pin_mysql_dll_dir():
     # 兼容兜底：把 bin 插到 PATH 最前
     os.environ["PATH"] = BIN_DIR + os.pathsep + os.environ.get("PATH", "")
 
+
 _pin_mysql_dll_dir()
+
 
 def start_mysql(timeout_seconds=40):
     print("[INFO] 启动外挂 MySQL…")
@@ -2072,12 +2314,14 @@ def start_mysql(timeout_seconds=40):
     stdout_lines, stderr_lines = [], []
     t_out = threading.Thread(target=_stream_reader, args=(proc.stdout, stdout_lines, "[STDOUT] "), daemon=True)
     t_err = threading.Thread(target=_stream_reader, args=(proc.stderr, stderr_lines, "[STDERR] "), daemon=True)
-    t_out.start(); t_err.start()
+    t_out.start();
+    t_err.start()
     MYSQL_LOG_THREADS[:] = [t_out, t_err]
 
     waited, interval = 0.0, 0.5
     while waited < timeout_seconds:
-        time.sleep(interval); waited += interval
+        time.sleep(interval);
+        waited += interval
         if is_mysql_running():
             _log_append("[INFO] MySQL 已启动，可连接")
             print("[INFO] MySQL 已启动，可连接")
@@ -2095,6 +2339,7 @@ def start_mysql(timeout_seconds=40):
     print("[ERROR] MySQL 启动失败或超时，详见", LOG_PATH)
     return None
 
+
 def ensure_mysql_ready():
     ensure_port_free(MYSQL_PORT)
     initialize_mysql_data()
@@ -2111,8 +2356,6 @@ def ensure_mysql_ready():
     return True
 
 
-
-
 # -------------------------------
 # 启动欢迎图片（Splash Screen）
 # -------------------------------
@@ -2127,14 +2370,18 @@ def show_splash():
     splash.show()
     QtWidgets.QApplication.processEvents()  # 立即刷新显示
     return splash
+
+
 def _on_about_to_quit():
     try:
         from PyQt5.QtMultimedia import QMediaPlayer
         for obj_name in dir(QtWidgets.QApplication.instance()):
             obj = getattr(QtWidgets.QApplication.instance(), obj_name, None)
             if isinstance(obj, QMediaPlayer):
-                try: obj.stop()
-                except Exception: pass
+                try:
+                    obj.stop()
+                except Exception:
+                    pass
     except Exception:
         pass
     # 兜底：也调用一次全局清理（幂等）
@@ -2142,6 +2389,8 @@ def _on_about_to_quit():
         _global_cleanup()
     except Exception:
         pass
+
+
 # if __name__ == "__main__":
 #
 #         app = QtWidgets.QApplication(sys.argv)
@@ -2171,7 +2420,9 @@ if __name__ == "__main__":
         _orig_warning = QtWidgets.QMessageBox.warning
         _orig_question = QtWidgets.QMessageBox.question
 
-        def _information_with_confirm(parent, title, text, buttons=QtWidgets.QMessageBox.Ok, defaultButton=QtWidgets.QMessageBox.NoButton):
+
+        def _information_with_confirm(parent, title, text, buttons=QtWidgets.QMessageBox.Ok,
+                                      defaultButton=QtWidgets.QMessageBox.NoButton):
             # 仅在使用默认按钮（常见三参数调用）时，替换按钮文字为"确认"
             if buttons == QtWidgets.QMessageBox.Ok and defaultButton == QtWidgets.QMessageBox.NoButton:
                 box = QtWidgets.QMessageBox(parent)
@@ -2187,7 +2438,9 @@ if __name__ == "__main__":
             else:
                 return _orig_information(parent, title, text, buttons, defaultButton)
 
-        def _critical_with_confirm(parent, title, text, buttons=QtWidgets.QMessageBox.Ok, defaultButton=QtWidgets.QMessageBox.NoButton):
+
+        def _critical_with_confirm(parent, title, text, buttons=QtWidgets.QMessageBox.Ok,
+                                   defaultButton=QtWidgets.QMessageBox.NoButton):
             if buttons == QtWidgets.QMessageBox.Ok and defaultButton == QtWidgets.QMessageBox.NoButton:
                 box = QtWidgets.QMessageBox(parent)
                 box.setIcon(QtWidgets.QMessageBox.Critical)
@@ -2202,7 +2455,9 @@ if __name__ == "__main__":
             else:
                 return _orig_critical(parent, title, text, buttons, defaultButton)
 
-        def _warning_with_confirm(parent, title, text, buttons=QtWidgets.QMessageBox.Ok, defaultButton=QtWidgets.QMessageBox.NoButton):
+
+        def _warning_with_confirm(parent, title, text, buttons=QtWidgets.QMessageBox.Ok,
+                                  defaultButton=QtWidgets.QMessageBox.NoButton):
             if buttons == QtWidgets.QMessageBox.Ok and defaultButton == QtWidgets.QMessageBox.NoButton:
                 box = QtWidgets.QMessageBox(parent)
                 box.setIcon(QtWidgets.QMessageBox.Warning)
@@ -2216,6 +2471,7 @@ if __name__ == "__main__":
                 return box.exec_()
             else:
                 return _orig_warning(parent, title, text, buttons, defaultButton)
+
 
         def _question_with_zh(parent, title, text, buttons=None, defaultButton=QtWidgets.QMessageBox.NoButton):
             # 当包含 Yes/No 按钮时，把按钮文本改为 确认/取消
@@ -2241,6 +2497,7 @@ if __name__ == "__main__":
                     btn.setText(label)
             return box.exec_()
 
+
         QtWidgets.QMessageBox.information = _information_with_confirm
         QMessageBox.information = _information_with_confirm
         QtWidgets.QMessageBox.critical = _critical_with_confirm
@@ -2251,7 +2508,7 @@ if __name__ == "__main__":
         QMessageBox.question = _question_with_zh
     except Exception:
         pass
-    
+
     splash = show_splash()
 
     # ✅ 初始化全局字体缩放控制器（方案2）
@@ -2314,7 +2571,8 @@ if __name__ == "__main__":
     from modules.qiangdujisuan.jiekou_python.jisuanjiemian import JisuanResultViewer
     from modules.yudingyi.predefined import yudingyi
     from modules.chanpinguanli.main2 import cpgl_Stats
-    window.show()
+
+    window.showMaximized()#0524新修改-初始界面最大化
     # ✅ 关闭欢迎图
     if splash:
         splash.finish(window)

@@ -5,13 +5,153 @@ import traceback
 from PyQt5 import QtWidgets
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
-                             QComboBox, QFileDialog, QFrame, QGroupBox, QHeaderView, QDateEdit, QMessageBox, QAction)
-from PyQt5.QtCore import Qt, QDate, pyqtSignal
+                             QComboBox, QFileDialog, QFrame, QGroupBox, QHeaderView, QDateEdit, QMessageBox, QAction,
+                             QStyledItemDelegate)
+from PyQt5.QtCore import Qt, QDate, pyqtSignal, QTimer, QObject
 from PyQt5.QtGui import QPixmap
 import shutil
 
 import modules.chanpinguanli.bianl as bianl
 # 按钮文件导入
+
+# 0506新修改--产品信息非法字符约束
+class TableLineEditFilter(QObject):
+    """表格行编辑器的实时验证过滤器"""
+    def __init__(self):
+        super().__init__()
+        self.last_warning_time = 0  # 防止频繁弹窗
+        
+    def eventFilter(self, obj, event):
+        if event.type() == event.KeyPress:
+            # 获取当前文本
+            text = obj.text()
+            cursor_pos = obj.cursorPosition()
+            
+            # 检查即将输入的字符
+            if event.text():
+                new_text = text[:cursor_pos] + event.text() + text[cursor_pos:]
+                
+                # 验证非法字符
+                import re
+                import time
+                illegal_chars = r'[\\/:*?"<>|]'
+                if re.search(illegal_chars, new_text):
+                    # 阻止输入
+                    current_time = time.time()
+                    
+                    # 防止频繁弹窗（间隔至少1秒）
+                    if current_time - self.last_warning_time > 1:
+                        illegal_found = re.findall(illegal_chars, event.text())
+                        illegal_unique = sorted(set(illegal_found))
+                        
+                        QMessageBox.warning(
+                            None,  # 使用None作为父窗口，避免依赖问题
+                            "提示",
+                            f"文件名不能包含下列任何字符：{' '.join(illegal_unique)}\n\n禁止使用的字符：\\ / : * ? \" < > |"
+                        )
+                        
+                        self.last_warning_time = current_time
+                        print(f"[实时验证] 非法字符已阻止: {event.text()}")
+                    
+                    return True
+                    
+        return super().eventFilter(obj, event)
+
+
+# 全局过滤器实例
+line_edit_filter = TableLineEditFilter()
+
+
+class ComboBoxFilter(QObject):
+    """下拉框的实时验证过滤器"""
+    def __init__(self):
+        super().__init__()
+        self.last_warning_time = 0
+        
+    def eventFilter(self, obj, event):
+        if event.type() == event.KeyPress:
+            # 检查即将输入的字符
+            if event.text():
+                # 获取当前文本
+                current_text = obj.currentText()
+                
+                # 验证非法字符
+                import re
+                import time
+                illegal_chars = r'[\\/:*?"<>|]'
+                if re.search(illegal_chars, event.text()):
+                    # 阻止输入
+                    current_time = time.time()
+                    
+                    # 防止频繁弹窗（间隔至少1秒）
+                    if current_time - self.last_warning_time > 1:
+                        illegal_found = re.findall(illegal_chars, event.text())
+                        illegal_unique = sorted(set(illegal_found))
+                        
+                        QMessageBox.warning(
+                            None,
+                            "提示",
+                            f"文件名不能包含下列任何字符：{' '.join(illegal_unique)}\n\n禁止使用的字符：\\ / : * ? \" < > |"
+                        )
+                        
+                        self.last_warning_time = current_time
+                        print(f"[实时验证] 下拉框非法字符已阻止: {event.text()}")
+                    
+                    return True
+                    
+        return super().eventFilter(obj, event)
+
+
+# 全局下拉框过滤器实例
+combo_filter = ComboBoxFilter()
+
+
+class TableItemDelegate(QStyledItemDelegate):
+    """表格项委托，用于实时验证非法字符"""
+    def createEditor(self, parent, option, index):
+        # 创建默认编辑器
+        editor = super().createEditor(parent, option, index)
+        
+        # 如果是文本编辑器，安装事件过滤器
+        if isinstance(editor, QLineEdit):
+            editor.installEventFilter(line_edit_filter)
+        # 如果是下拉框，安装下拉框过滤器
+        elif isinstance(editor, QComboBox):
+            editor.installEventFilter(combo_filter)
+            # 为下拉框的编辑器（如果可编辑）也安装文本过滤器
+            if editor.isEditable():
+                editor.lineEdit().installEventFilter(line_edit_filter)
+            
+        return editor
+    
+    def setModelData(self, editor, model, index):
+        # 在设置模型数据前进行最终验证
+        if isinstance(editor, QLineEdit):
+            text = editor.text()
+            
+            # 验证非法字符
+            import re
+            illegal_chars = r'[\\/:*?"<>|]'
+            if re.search(illegal_chars, text):
+                # 移除非法字符
+                cleaned_text = re.sub(illegal_chars, '', text)
+                editor.setText(cleaned_text)
+                
+                # 弹窗提示
+                illegal_found = re.findall(illegal_chars, text)
+                illegal_unique = sorted(set(illegal_found))
+                QMessageBox.warning(
+                    bianl.main_window,
+                    "提示",
+                    f"文件名不能包含下列任何字符：{' '.join(illegal_unique)}\n\n禁止使用的字符：\\ / : * ? \" < > |"
+                )
+                
+                # 设置清理后的数据
+                super().setModelData(editor, model, index)
+                return
+        
+        # 正常设置数据
+        super().setModelData(editor, model, index)
 
 import modules.chanpinguanli.project_confirm_btn as project_confirm_btn
 import modules.chanpinguanli.modify_project as modify_project
@@ -32,6 +172,55 @@ import modules.chanpinguanli.new_project_button as new_project_button
 from PyQt5.QtWidgets import QFileDialog, QPushButton
 from PyQt5.QtWidgets import QStyle
 from PyQt5.QtCore import QObject, QEvent
+from pymysql import MySQLError
+
+# 产品设计活动库中所有需要按产品ID复制的活动子表（用户确认：前缀为“产品设计活动表_”的全部表）
+ACTIVITY_PREFIX_TABLES = [
+    "产品设计活动表_布管参数表",
+    "产品设计活动表_布管榫钉记录表",
+    "产品设计活动表_布管吊环螺钉表",
+    "产品设计活动表_布管防冲板表",
+    "产品设计活动表_布管管口表",
+    "产品设计活动表_布管焊接式防冲板表",
+    "产品设计活动表_布管换热管表",
+    "产品设计活动表_布管计算结果表",
+    "产品设计活动表_布管交叉布管表",
+    "产品设计活动表_布管结果表",
+    "产品设计活动表_布管拉杆表",
+    "产品设计活动表_布管旁路挡板表",
+    "产品设计活动表_布管输入表",
+    "产品设计活动表_布管数量表",
+    "产品设计活动表_布管数量表_竖直",
+    "产品设计活动表_布管数量表_水平",
+    "产品设计活动表_布管数量表_显示",
+    "产品设计活动表_布管元件表",
+    "产品设计活动表_布管中间挡板表",
+    "产品设计活动表_布管坐标表",
+    "产品设计活动表_产品标准数据表",
+    "产品设计活动表_附件表",
+    "产品设计活动表_管板连接表",
+    "产品设计活动表_管板形式表",
+    "产品设计活动表_管口表",
+    "产品设计活动表_管口附加参数表",
+    "产品设计活动表_管口附件附加参数表",
+    "产品设计活动表_管口计算提交表",
+    "产品设计活动表_管口类别表",
+    "产品设计活动表_管口类型选择表",
+    "产品设计活动表_管件材料表",
+    "产品设计活动表_管件材料参数表",
+    "产品设计活动表_载荷表",
+    "产品设计活动表_计算结果日志表",
+    "产品设计活动表_计算提交表",
+    "产品设计活动表_设计数据表",
+    "产品设计活动表_设计数据计算提交表",
+    "产品设计活动表_通用数据表",
+    "产品设计活动表_涂漆数据表",
+    "产品设计活动表_无损检测数据表",
+    "产品设计活动表_元件材料表",
+    "产品设计活动表_元件附加参数表",
+    "产品设计活动表_元件附加参数合并表",
+    "产品设计活动表_元件计算结果表",
+]
 
 # 点击回车 项目信息 回车
 # 项目信息部分的项目管理下移
@@ -54,6 +243,8 @@ from PyQt5.QtCore import Qt, QObject, pyqtSignal
 from typing import Callable, List, Optional
 from PyQt5.QtCore import Qt, QObject
 from PyQt5.QtWidgets import QStyledItemDelegate, QComboBox, QTableWidget, QTableWidgetItem, QWidget
+# 0506新修改--产品信息非法字符约束
+from PyQt5.QtWidgets import QLineEdit
 
 # 拦截 没有产品id的自删自增
 def _row_has_product_id(row: int) -> bool:
@@ -69,6 +260,87 @@ def on_product_cell_changed_router(row: int, col: int):
         return
     table._routing = True
     try:
+        # 0506新修改--产品信息非法字符约束
+        # 实时验证文件名非法字符
+        if col in [1, 2, 3, 5]:  # 产品名称、设备位号、产品编号、设计版次列
+            item = table.item(row, col)
+            if item:
+                text = item.text().strip()
+                if text:
+                    # 导入验证函数
+                    import re
+                    illegal_chars = r'[\\/:*?"<>|]'
+                    
+                    if re.search(illegal_chars, text):
+                        # 找到非法字符，阻止输入并弹窗提示
+                        illegal_found = re.findall(illegal_chars, text)
+                        illegal_unique = sorted(set(illegal_found))  # 排序以保持一致的显示顺序
+                        field_names = {1: "产品名称", 2: "设备位号", 3: "产品编号", 5: "设计版次"}
+                        field_name = field_names.get(col, f"第{col}列")
+                        
+                        # 阻止输入：移除非法字符
+                        cleaned_text = re.sub(illegal_chars, '', text)
+                        
+                        # 阻止信号循环，恢复清理后的文本
+                        table.blockSignals(True)
+                        item.setText(cleaned_text)
+                        table.blockSignals(False)
+                        
+                        # 弹窗提示用户
+                        QMessageBox.warning(
+                            bianl.main_window,
+                            "提示",
+                            f"文件名不能包含下列任何字符：{' '.join(illegal_unique)}\n\n禁止使用的字符：\\ / : * ? \" < > |"
+                        )
+                        
+                        print(f"[实时验证] {field_name}非法字符已阻止: {text} -> {cleaned_text}")
+        
+        # 设计阶段是下拉框，需要特殊处理
+        elif col == 4:  # 设计阶段列
+            widget = table.cellWidget(row, col)
+            if widget and hasattr(widget, 'currentText'):
+                text = widget.currentText().strip()
+                if text:
+                    # 导入验证函数
+                    import re
+                    illegal_chars = r'[\\/:*?"<>|]'
+                    
+                    if re.search(illegal_chars, text):
+                        # 找到非法字符，阻止输入并弹窗提示
+                        illegal_found = re.findall(illegal_chars, text)
+                        illegal_unique = sorted(set(illegal_found))  # 排序以保持一致的显示顺序
+                        
+                        # 阻止输入：移除非法字符
+                        cleaned_text = re.sub(illegal_chars, '', text)
+                        
+                        # 同时更新下拉框和表格项
+                        table.blockSignals(True)
+                        widget.blockSignals(True)
+                        
+                        # 设置下拉框文本
+                        widget.setCurrentText(cleaned_text)
+                        
+                        # 同时更新表格项（确保数据一致性）
+                        item = table.item(row, col)
+                        if item:
+                            item.setText(cleaned_text)
+                        else:
+                            # 如果没有表格项，创建一个
+                            item = QTableWidgetItem(cleaned_text)
+                            table.setItem(row, col, item)
+                        
+                        widget.blockSignals(False)
+                        table.blockSignals(False)
+                        
+                        # 弹窗提示用户
+                        QMessageBox.warning(
+                            bianl.main_window,
+                            "提示",
+                            f"文件名不能包含下列任何字符：{' '.join(illegal_unique)}\n\n禁止使用的字符：\\ / : * ? \" < > |"
+                        )
+                        
+                        print(f"[实时验证] 设计阶段非法字符已阻止: {text} -> {cleaned_text}")
+        
         if not _row_has_product_id(row):
             # 只有“无 product_id”的行，才继续走原来的自动增/删逻辑
             auto_edit_row.handle_auto_add_row(row, col)
@@ -111,6 +383,12 @@ class EditOnlyComboDelegate(QStyledItemDelegate):
         combo.setEditable(self._editable)
         combo.setInsertPolicy(QComboBox.NoInsert)
         combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+
+        # 0506新修改--产品信息非法字符约束-
+        # —— 安装实时非法字符验证过滤器 ——
+        combo.installEventFilter(combo_filter)
+        if combo.isEditable() and combo.lineEdit():
+            combo.lineEdit().installEventFilter(line_edit_filter)
 
         # —— ① 下拉框lineEdit左对齐，下拉列表选项居中显示 ——
         # 1108新修改-设计阶段左对齐显示
@@ -452,17 +730,27 @@ def unlock_combo(combo: QComboBox):
     combo.setEnabled(True)
     combo.setMinimumWidth(0)
 
+    # 0526新修改-使用 QListView 代替 Windows 原生视图，以使下拉菜单样式表（字号等）生效
+    from PyQt5.QtWidgets import QListView
+    combo.setView(QListView())
+
     # 获取图片路径（使用主程序目录 + 相对路径）
     base_dir = os.getcwd()  # main.py 的位置
     image_path = os.path.join(base_dir, "modules", "chanpinguanli", "icons", "下箭头.png").replace("\\", "/")
     combo.setStyleSheet(f"""
+
         QComboBox {{
             background-color: 000000;  /* 更浅的，更贴近你的图片 */
             color: black;
             border: 1px solid rgb(180, 180, 180);  /* 中灰边框 */
             border-radius: 2px;
-            padding: 6px 8px 6px 8px;  /* 左右内边距大一点，给右侧箭头留空间 */
-            font-size: 11pt;
+            padding: 2px 8px 2px 8px;  /* 限制上下内边距为 2px，左右为 8px */
+            font-size: 9pt;           /* 字体字号改为标准的 9pt */
+            font-family: '宋体';
+        }}
+
+        QComboBox QAbstractItemView {{
+            font-size: 11pt;          /* 下拉菜单内的选项字体字号改回 11pt */
             font-family: '宋体';
         }}
 
@@ -471,21 +759,23 @@ def unlock_combo(combo: QComboBox):
             border: 1px solid rgb(51, 153, 255);
         }}
 
+
         QComboBox::drop-down {{
             subcontrol-origin: padding;
             subcontrol-position: top right;
-            width: 30px;
+            width: 24px;
             border: none;
             background: transparent;
         }}
 
         QComboBox::down-arrow {{
             image: url("{image_path}");
-            width: 30px;
-            height: 20px;
+            width: 14px;
+            height: 14px;
         }}
     """)
     _install_no_wheel_on_combo(combo)
+
 
 
 # --- QLineEdit 控件状态管理 ---
@@ -770,6 +1060,7 @@ def on_product_row_clicked(row, column):
     reset_product_definition_controls()
 
     product_id = row_status.get("product_id", None)
+    definition_status = row_status.get("definition_status", "edit")
     # 修改的检测
     bianl.product_id = product_id
     # 获取不到 获取到了
@@ -778,6 +1069,12 @@ def on_product_row_clicked(row, column):
         clear_product_definition_fields()
         # 新增：点击空白行时，发射None信号来清空左下角产品信息
         product_manager.update_product_id(None)  # 发射None信号清空产品信息
+        bianl.product_local_files_missing_readonly = False
+        try:
+            from modules.chanpinguanli import local_product_folder
+            local_product_folder._refresh_main_window_tabs_readonly()
+        except Exception:
+            pass
     else:
         PRODUCT_ID = bianl.product_id  # 加载产品定义字段内容（只更新界面，不判断状态）
         fetch_and_update_product_definition_by_id(bianl.product_id)
@@ -785,7 +1082,13 @@ def on_product_row_clicked(row, column):
         product_manager.update_product_id(PRODUCT_ID)  # 第二个文件会自动收到新值改66
         # 行切换后强制刷新示意图：若类型/型式与上一行相同，setCurrentText 不会触发 currentTextChanged，try_show_image 不会跑
         try_show_image()
-    definition_status = row_status.get("definition_status", "edit")
+        try:
+            from modules.chanpinguanli import local_product_folder
+            local_product_folder.maybe_prompt_local_product_recovery(
+                bianl.main_window, PRODUCT_ID, definition_status
+            )
+        except Exception as _e_rec:
+            print(f"[on_product_row_clicked] 本地文件夹检查: {_e_rec}")
 
     # 根据状态锁定或解锁定义区控件 改77
     if definition_status == "view":
@@ -1607,6 +1910,356 @@ def fetch_and_display_image_by_type_form(product_type, product_form):
         # bianl.image_label.setText("数据库连接失败")
 
 
+def _table_exists(cursor, table_name: str) -> bool:
+    cursor.execute("SHOW TABLES LIKE %s", (table_name,))
+    return cursor.fetchone() is not None
+
+
+def _bulk_copy_rows_by_product_id(cursor, table_name: str, old_product_id: str, new_product_id: str):
+    """复制指定表中同一产品ID的所有行；表不存在时直接跳过。"""
+    if not _table_exists(cursor, table_name):
+        print(f"[复制产品] 跳过不存在的表: {table_name}")
+        return
+
+    # 排除自增列，避免复制时触发 PRIMARY KEY 重复
+    cursor.execute(f"SHOW COLUMNS FROM `{table_name}`")
+    columns_meta = cursor.fetchall() or []
+    auto_increment_cols = {
+        (col.get("Field") or "").strip()
+        for col in columns_meta
+        if "auto_increment" in str(col.get("Extra") or "").lower()
+    }
+
+    cursor.execute(f"SELECT * FROM `{table_name}` WHERE `产品ID` = %s", (old_product_id,))
+    rows = cursor.fetchall() or []
+    if not rows:
+        return
+
+    for row in rows:
+        row_data = dict(row)
+        row_data["产品ID"] = new_product_id
+        for auto_col in auto_increment_cols:
+            row_data.pop(auto_col, None)
+        columns = list(row_data.keys())
+        placeholders = ", ".join(["%s"] * len(columns))
+        col_sql = ", ".join([f"`{col}`" for col in columns])
+        sql = f"INSERT INTO `{table_name}` ({col_sql}) VALUES ({placeholders})"
+        values = [row_data[col] for col in columns]
+        cursor.execute(sql, values)
+
+
+def _generate_copy_product_name(project_id: str, base_name: str) -> str:
+    """生成设备名称副本（产品名称），冲突时自动递增 _副本2/_副本3。"""
+    source = (base_name or "").strip()
+    if not source:
+        source = "产品"
+
+    candidate = f"{source}_副本"
+    suffix = 2
+    conn = common_usage.get_mysql_connection_product()
+    cur = conn.cursor()
+    try:
+        while True:
+            cur.execute(
+                "SELECT 1 FROM 产品需求表 WHERE 项目ID = %s AND 产品名称 = %s LIMIT 1",
+                (project_id, candidate),
+            )
+            if not cur.fetchone():
+                return candidate
+            candidate = f"{source}_副本{suffix}"
+            suffix += 1
+    finally:
+        cur.close()
+        conn.close()
+
+
+def _generate_unique_folder_path(base_folder_path: str) -> str:
+    """确保产品目录不重名，必要时自动追加序号。"""
+    if not os.path.exists(base_folder_path):
+        return base_folder_path
+    index = 2
+    while True:
+        candidate = f"{base_folder_path}_{index}"
+        if not os.path.exists(candidate):
+            return candidate
+        index += 1
+
+
+def _prepare_new_product_folder(source_folder: str, target_folder: str, new_product_id: str):
+    """复制或初始化产品目录，并写入新产品ID。"""
+    if source_folder and os.path.isdir(source_folder):
+        shutil.copytree(source_folder, target_folder)
+    else:
+        os.makedirs(target_folder, exist_ok=True)
+        # 源目录缺失时仍补齐模板文件，保证新产品可用
+        template_path = os.path.join(os.path.dirname(__file__), "条件输入数据表.xlsx")
+        template_path2 = os.path.join(os.path.dirname(__file__), "管口导入模板.xlsx")
+        if os.path.exists(template_path):
+            shutil.copy(template_path, os.path.join(target_folder, "条件输入数据表.xlsx"))
+        if os.path.exists(template_path2):
+            shutil.copy(template_path2, os.path.join(target_folder, "管口导入模板.xlsx"))
+
+    with open(os.path.join(target_folder, "pro_id.csv"), "w", encoding="utf-8") as f:
+        f.write(str(new_product_id))
+
+
+def _shift_row_status_for_insert(insert_row: int):
+    """表格插入行后，同步移动状态字典下标。"""
+    shifted = {}
+    for row_idx in sorted(bianl.product_table_row_status.keys(), reverse=True):
+        status = bianl.product_table_row_status[row_idx]
+        if row_idx >= insert_row:
+            shifted[row_idx + 1] = status
+        else:
+            shifted[row_idx] = status
+    bianl.product_table_row_status = dict(sorted(shifted.items(), key=lambda x: x[0]))
+
+
+def _find_first_empty_product_row():
+    """
+    第一个尚未绑定产品ID的空白行（用于复制落位）。
+    避免仅有一个产品时误用 rowCount-1 插入，导致新行出现在第三行而非第二行。
+    """
+    table = bianl.product_table
+    for r in range(table.rowCount()):
+        st = bianl.product_table_row_status.get(r, {})
+        if isinstance(st, dict) and not st.get("product_id"):
+            return r
+    return -1
+
+
+def _append_copied_product_to_ui(source_row: dict, new_product_id: str):
+    table = bianl.product_table
+    # 优先占用第一个“无产品ID”的空白行，直接填表，不整表下移；仅在无空白行时再插入
+    target_row = _find_first_empty_product_row()
+    need_insert = target_row < 0
+    blank_row = None
+    if need_insert:
+        target_row = max(0, table.rowCount() - 1)
+
+    table.blockSignals(True)
+    try:
+        if need_insert:
+            table.insertRow(target_row)
+            _shift_row_status_for_insert(target_row)
+
+        serial_item = QTableWidgetItem(f"{target_row + 1:02d}")
+        serial_item.setTextAlignment(Qt.AlignCenter)
+        serial_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+        table.setItem(target_row, 0, serial_item)
+
+        table.setItem(target_row, 1, QTableWidgetItem((source_row.get("产品名称") or "").strip()))
+        table.setItem(target_row, 2, QTableWidgetItem((source_row.get("设备位号") or "").strip()))
+        table.setItem(target_row, 3, QTableWidgetItem((source_row.get("产品编号") or "").strip()))
+
+        stage_item = QTableWidgetItem((source_row.get("设计阶段") or "").strip())
+        stage_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        table.setItem(target_row, 4, stage_item)
+        table.setItem(target_row, 5, QTableWidgetItem((source_row.get("设计版次") or "").strip()))
+
+        bianl.product_table_row_status[target_row] = {
+            "status": "view",
+            "definition_status": "view" if (source_row.get("产品类型") and source_row.get("产品型式")) else "edit",
+            "product_id": new_product_id,
+            "old_serial": f"{target_row + 1:03d}",
+            "old_name": (source_row.get("产品名称") or "").strip(),
+            "old_number": (source_row.get("产品编号") or "").strip(),
+            "old_position": (source_row.get("设备位号") or "").strip(),
+        }
+
+        # 始终保证末尾至少保留一行“无 product_id”的空白行，便于继续新增/复制
+        if _find_first_empty_product_row() < 0:
+            blank_row = table.rowCount()
+            table.insertRow(blank_row)
+            set_row_number(blank_row)
+            bianl.product_table_row_status[blank_row] = {
+                "status": "start",
+                "definition_status": "start",
+            }
+            for c in range(1, table.columnCount()):
+                if table.item(blank_row, c) is None:
+                    table.setItem(blank_row, c, QTableWidgetItem(""))
+    finally:
+        table.blockSignals(False)
+
+    auto_edit_row.update_row_numbers()
+    product_confirm_qianzhi.set_row_editable(target_row, False)
+    if blank_row is not None:
+        product_confirm_qianzhi.set_row_editable(blank_row, True)
+    table.setCurrentCell(target_row, 1)
+    on_product_row_clicked(target_row, 1)
+
+
+def show_product_table_context_menu(pos):
+    """产品表右键菜单：复制产品。"""
+    table = getattr(bianl, "product_table", None)
+    if table is None:
+        return
+
+    clicked_row = table.rowAt(pos.y())
+    if clicked_row < 0:
+        return
+
+    table.setCurrentCell(clicked_row, 1 if table.columnCount() > 1 else 0)
+    menu = QtWidgets.QMenu(table)
+    copy_action = menu.addAction("复制产品")
+    chosen_action = menu.exec_(table.viewport().mapToGlobal(pos))
+    if chosen_action == copy_action:
+        copy_selected_product()
+
+
+def copy_selected_product():
+    """复制当前选中产品：主表 + 活动主表 + 全部活动前缀子表 + 本地目录。"""
+    row = bianl.product_table.currentRow()
+    row_status = bianl.product_table_row_status.get(row, {})
+    source_product_id = row_status.get("product_id") if isinstance(row_status, dict) else None
+    if not source_product_id:
+        bianl.main_window.line_tip.setText("请选择已保存的产品后再复制。")
+        bianl.main_window.line_tip.setToolTip("请选择已保存的产品后再复制。")
+        bianl.main_window.line_tip.setStyleSheet("color: black;")
+        QTimer.singleShot(5000, clear_line_tip)
+        return
+
+    if not project_confirm_btn.show_confirm_dialog(
+        bianl.main_window,
+        "确认复制",
+        "是否确认复制当前产品？",
+    ):
+        return
+
+    conn_product = conn_active = conn_project = None
+    cur_product = cur_active = cur_project = None
+    target_folder = None
+    try:
+        conn_product = common_usage.get_mysql_connection_product()
+        conn_active = common_usage.get_mysql_connection_active()
+        conn_project = common_usage.get_mysql_connection_project()
+        cur_product = conn_product.cursor()
+        cur_active = conn_active.cursor()
+        cur_project = conn_project.cursor()
+
+        cur_product.execute("SELECT * FROM 产品需求表 WHERE 产品ID = %s", (source_product_id,))
+        source_product_row = cur_product.fetchone()
+        if not source_product_row:
+            raise ValueError("源产品不存在，无法复制。")
+
+        source_product_row = dict(source_product_row)
+        new_product_id = common_usage.get_next_product_id()
+        new_product_name = _generate_copy_product_name(
+            source_product_row.get("项目ID") or bianl.current_project_id,
+            source_product_row.get("产品名称") or "",
+        )
+
+        # 计算新产品目录（沿用原系统目录规则）
+        cur_project.execute(
+            "SELECT 项目保存路径 FROM 项目需求表 WHERE 项目ID = %s",
+            (source_product_row.get("项目ID") or bianl.current_project_id,),
+        )
+        project_row = cur_project.fetchone() or {}
+        project_save_path = (project_row.get("项目保存路径") or "").strip()
+        if not project_save_path:
+            raise ValueError("未找到项目保存路径，无法复制产品。")
+
+        project_root = os.path.join(
+            project_save_path,
+            f"{bianl.owner_input.text().strip()}_{bianl.project_name_input.text().strip()}",
+        )
+        # 与表格落位一致：首个空白行序号 = 行号+1，避免仅 1 个产品时误用 rowCount 得到 003
+        _empty_slot = _find_first_empty_product_row()
+        if _empty_slot >= 0:
+            new_serial = f"{_empty_slot + 1:03d}"
+        else:
+            new_serial = f"{bianl.product_table.rowCount():03d}"
+        folder_name = product_confirm_qianzhi.build_pd_folder_name(
+            new_serial,
+            new_product_name,
+            source_product_row.get("设备位号") or "",
+            source_product_row.get("产品编号") or "",
+        )
+        target_folder = _generate_unique_folder_path(os.path.join(project_root, folder_name))
+
+        cur_active.execute("SELECT * FROM 产品设计活动表 WHERE 产品ID = %s", (source_product_id,))
+        source_activity_main = cur_active.fetchone()
+        source_folder = ""
+        if source_activity_main:
+            source_folder = (source_activity_main.get("产品文件夹绝对路径") or "").strip()
+
+        # 先处理本地目录，确保数据库路径写入的是可用目录
+        _prepare_new_product_folder(source_folder, target_folder, new_product_id)
+        target_folder_abs = os.path.abspath(target_folder)
+
+        # 开始写库（产品库 + 活动库）
+        source_product_row["产品ID"] = new_product_id
+        source_product_row["产品名称"] = new_product_name
+        product_cols = list(source_product_row.keys())
+        product_col_sql = ", ".join([f"`{col}`" for col in product_cols])
+        product_placeholder = ", ".join(["%s"] * len(product_cols))
+        cur_product.execute(
+            f"INSERT INTO 产品需求表 ({product_col_sql}) VALUES ({product_placeholder})",
+            [source_product_row[col] for col in product_cols],
+        )
+
+        if source_activity_main:
+            source_activity_main = dict(source_activity_main)
+            source_activity_main["产品ID"] = new_product_id
+            source_activity_main["产品文件夹绝对路径"] = target_folder_abs
+            main_cols = list(source_activity_main.keys())
+            main_col_sql = ", ".join([f"`{col}`" for col in main_cols])
+            main_placeholder = ", ".join(["%s"] * len(main_cols))
+            cur_active.execute(
+                f"INSERT INTO 产品设计活动表 ({main_col_sql}) VALUES ({main_placeholder})",
+                [source_activity_main[col] for col in main_cols],
+            )
+        else:
+            cur_active.execute(
+                """
+                INSERT INTO 产品设计活动表 (产品ID, 项目ID, 产品文件夹绝对路径)
+                VALUES (%s, %s, %s)
+                """,
+                (new_product_id, source_product_row.get("项目ID") or bianl.current_project_id, target_folder_abs),
+            )
+
+        for table_name in ACTIVITY_PREFIX_TABLES:
+            _bulk_copy_rows_by_product_id(cur_active, table_name, source_product_id, new_product_id)
+
+        conn_product.commit()
+        conn_active.commit()
+
+        _append_copied_product_to_ui(source_product_row, new_product_id)
+        bianl.main_window.line_tip.setText(f"复制成功：{new_product_name}")
+        bianl.main_window.line_tip.setToolTip(f"复制成功：{new_product_name}")
+        bianl.main_window.line_tip.setStyleSheet("color: black;")
+        QTimer.singleShot(5000, clear_line_tip)
+    except (ValueError, MySQLError, OSError) as e:
+        if conn_product:
+            conn_product.rollback()
+        if conn_active:
+            conn_active.rollback()
+        # 数据库失败时清理已创建目录，避免残留
+        if target_folder and os.path.isdir(target_folder):
+            try:
+                shutil.rmtree(target_folder)
+            except OSError:
+                pass
+        bianl.main_window.line_tip.setText(f"复制产品失败：{e}")
+        bianl.main_window.line_tip.setToolTip(f"复制产品失败：{e}")
+        bianl.main_window.line_tip.setStyleSheet("color: black;")
+        QTimer.singleShot(5000, clear_line_tip)
+    finally:
+        for cursor in (cur_product, cur_active, cur_project):
+            try:
+                if cursor:
+                    cursor.close()
+            except Exception:
+                pass
+        for conn in (conn_product, conn_active, conn_project):
+            try:
+                if conn:
+                    conn.close()
+            except Exception:
+                pass
+
+
 """删除产品"""
 # 1112新修改 - 关闭产品的所有已打开界面（除了项目管理界面）
 def close_product_related_tabs(product_id):
@@ -1670,6 +2323,22 @@ def build_pd_folder_name(serial, name, position, number):
 def rename_remaining_product_folders(project_root):
     print("开始重名命名")
     """删除行后，按最新序号重命名剩余产品的文件夹"""
+    # 删除前序产品后，目录名里的“序号”会变化；但后续“本地缺失判断”优先用数据库里
+    # 产品设计活动表.产品文件夹绝对路径，所以这里需要在重命名目录后同步更新绝对路径。
+    conn_act = None
+    cursor_act = None
+    sql_act = """
+        UPDATE 产品设计活动表
+        SET 产品文件夹绝对路径 = %s
+        WHERE 产品ID = %s
+    """
+    try:
+        conn_act = common_usage.get_mysql_connection_active()
+        cursor_act = conn_act.cursor()
+    except Exception as e:
+        # 若活动库连接失败，至少确保文件系统重命名不受影响
+        print(f"[rename_remaining_product_folders] 活动库连接失败，跳过路径同步: {e}")
+
     for row in range(bianl.product_table.rowCount()):
         status = bianl.product_table_row_status.get(row, {})
         product_id = status.get("product_id")
@@ -1710,6 +2379,30 @@ def rename_remaining_product_folders(project_root):
                 # status["old_position"] = position
             except Exception as e:
                 print(f"[重命名失败] {old_folder} -> {new_folder}: {e}")
+
+        # 无论是否发生 os.rename：只要“序号导致目录名变化”且新目录已存在，就把新绝对路径写回活动库。
+        # 这能覆盖“旧目录名不存在（可能已被部分重命名）但新目录已存在”的场景。
+        if cursor_act and old_folder != new_folder and os.path.isdir(new_folder):
+            try:
+                new_folder_abs = os.path.abspath(new_folder)
+                cursor_act.execute(sql_act, (new_folder_abs, product_id))
+            except Exception as e:
+                print(f"[rename_remaining_product_folders] 更新产品文件夹绝对路径失败: product_id={product_id}, err={e}")
+
+    if conn_act:
+        try:
+            conn_act.commit()
+        except Exception:
+            pass
+        try:
+            if cursor_act:
+                cursor_act.close()
+        except Exception:
+            pass
+        try:
+            conn_act.close()
+        except Exception:
+            pass
 
 
 def prepare_product_table_old_status_for_delete() -> bool:
@@ -1815,33 +2508,54 @@ def perform_product_delete(row: int, product_id) -> bool:
             print("[删除操作] 未能从数据库中获取项目路径")
 
         print("[删除操作] >>> 开始界面同步操作")
-        bianl.product_table.removeRow(row)
-        print(f"[删除操作] 表格行 {row} 删除")
-        if row in bianl.product_table_row_status:
-            print(f"[删除操作] 从状态字典中移除行: {row}")
-            bianl.product_table_row_status.pop(row)
-        else:
-            print(f"[删除操作] 行 {row} 不存在于状态字典中")
+        # 整段阻塞：removeRow 会触发 currentCellChanged → on_product_row_clicked → 本地缺失弹窗；
+        # 若仅阻塞最后的 setCurrentCell，删除「最后一个产品」时仍会先弹一次，与末尾显式 on_product_row_clicked 重复。
+        table = bianl.product_table
+        table.blockSignals(True)
+        try:
+            table.removeRow(row)
+            print(f"[删除操作] 表格行 {row} 删除")
+            if row in bianl.product_table_row_status:
+                print(f"[删除操作] 从状态字典中移除行: {row}")
+                bianl.product_table_row_status.pop(row)
+            else:
+                print(f"[删除操作] 行 {row} 不存在于状态字典中")
 
-        refresh_product_table_row_status()
-        print("[删除操作] 表格状态刷新完成")
-        auto_edit_row.update_row_numbers()
-        print("[删除操作] 更新表格序号")
+            refresh_product_table_row_status()
+            print("[删除操作] 表格状态刷新完成")
+            auto_edit_row.update_row_numbers()
+            print("[删除操作] 更新表格序号")
 
-        current_row_count = bianl.product_table.rowCount()
-        if current_row_count < 3:
-            needed_rows = 3 - current_row_count
-            print(f"[删除操作] 当前行数 {current_row_count} 小于3，需补充 {needed_rows} 行")
-            for i in range(needed_rows):
-                new_row = bianl.product_table.rowCount()
-                bianl.product_table.insertRow(new_row)
-                set_row_number(new_row)
-                bianl.product_table_row_status[new_row] = {
-                    "status": "start",
-                    "definition_status": "edit"
-                }
-                print(f"[删除操作] 已添加空白行 {new_row}，状态为 start/edit")
-            print(f"[删除操作] 最终表格行数：{bianl.product_table.rowCount()}")
+            current_row_count = table.rowCount()
+            if current_row_count < 3:
+                needed_rows = 3 - current_row_count
+                print(f"[删除操作] 当前行数 {current_row_count} 小于3，需补充 {needed_rows} 行")
+                for i in range(needed_rows):
+                    new_row = table.rowCount()
+                    table.insertRow(new_row)
+                    set_row_number(new_row)
+                    bianl.product_table_row_status[new_row] = {
+                        "status": "start",
+                        "definition_status": "edit"
+                    }
+                    print(f"[删除操作] 已添加空白行 {new_row}，状态为 start/edit")
+                print(f"[删除操作] 最终表格行数：{table.rowCount()}")
+
+            # 选中删除行的上一行（与未阻塞时 Qt 常见行为一致）；阻塞期间需自行更新 bianl.row/colum
+            focus_row = max(0, row - 1)
+            if focus_row >= table.rowCount():
+                focus_row = max(0, table.rowCount() - 1)
+            ncol = table.columnCount()
+            foc_col = (
+                bianl.colum
+                if isinstance(getattr(bianl, "colum", None), int) and 0 <= bianl.colum < ncol
+                else 1
+            )
+            bianl.row = focus_row
+            bianl.colum = foc_col
+            table.setCurrentCell(focus_row, foc_col)
+        finally:
+            table.blockSignals(False)
 
         clear_product_definition_fields()
         bianl.product_id = None
@@ -1858,8 +2572,7 @@ def perform_product_delete(row: int, product_id) -> bool:
         print("[删除操作] 所有删除操作完成")
         print("=" * 50)
 
-        bianl.product_table.setCurrentCell(bianl.row, bianl.colum)
-        bianl.product_table.setFocus()
+        table.setFocus()
         on_product_row_clicked(bianl.row, bianl.colum)
         return True
 
@@ -1871,21 +2584,6 @@ def perform_product_delete(row: int, product_id) -> bool:
         bianl.main_window.line_tip.setToolTip(f"删除失败：{e}")
         bianl.main_window.line_tip.setStyleSheet("color: black;")
         return False
-
-
-def delete_product_by_id_after_missing_local(product_id) -> bool:
-    """本地条件输入文件缺失且用户已确认删除时调用，与「删除产品」按钮同一套逻辑（无二次确认）。"""
-    if not prepare_product_table_old_status_for_delete():
-        return False
-    row = find_product_table_row_by_product_id(product_id)
-    if row < 0:
-        print(f"[同步删除] 产品表中未找到 product_id={product_id}")
-        bianl.main_window.line_tip.setText("未在产品表中找到该产品，无法同步删除")
-        bianl.main_window.line_tip.setToolTip("未在产品表中找到该产品，无法同步删除")
-        bianl.main_window.line_tip.setStyleSheet("color: black;")
-        QTimer.singleShot(5000, clear_line_tip)
-        return False
-    return perform_product_delete(row, product_id)
 
 
 # 删除产品的函数
@@ -1925,45 +2623,11 @@ def delete_product_from_activity_db(product_id: str):
         conn = common_usage.get_mysql_connection_active()  # 产品设计活动库
         cursor = conn.cursor()
 
-        table_list = [
-            "产品设计活动表",
-            "产品设计活动表_布管参数表",
-            "产品设计活动表_布管换热管表",
-            "产品设计活动表_布管计算结果表",
-            "产品设计活动表_布管交叉布管表",
-            "产品设计活动表_布管结果表",
-            "产品设计活动表_布管拉杆表",
-            "产品设计活动表_布管输入表",
-            "产品设计活动表_布管数量表_水平",
-            "产品设计活动表_布管数量表_竖直",
-            "产品设计活动表_布管数量表_显示",
-
-            "产品设计活动表_布管元件表",
-            "产品设计活动表_布管坐标表",
-            "产品设计活动表_产品标准数据表",
-            "产品设计活动表_附件表",
-            "产品设计活动表_管板连接表",
-            "产品设计活动表_管板形式表",
-            "产品设计活动表_管口表",
-            "产品设计活动表_管口附加参数表",
-            "产品设计活动表_管口计算提交表",
-            "产品设计活动表_管口类别表",
-            "产品设计活动表_管口类型选择表",
-            "产品设计活动表_管口零件材料表",
-            "产品设计活动表_管口零件材料参数表",
-            "产品设计活动表_计算结果日志表",
-            "产品设计活动表_计算提交表",
-            "产品设计活动表_设计数据表",
-            "产品设计活动表_设计数据计算提交表",
-            "产品设计活动表_通用数据表",
-            "产品设计活动表_涂漆数据表",
-            "产品设计活动表_无损检测数据表",
-            "产品设计活动表_元件材料表",
-            "产品设计活动表_元件附加参数表",
-            "产品设计活动表_元件计算结果表"
-        ]
+        table_list = ["产品设计活动表"] + ACTIVITY_PREFIX_TABLES
 
         for table in table_list:
+            if not _table_exists(cursor, table):
+                continue
             sql = f"DELETE FROM `{table}` WHERE 产品ID = %s"
             print(f"[活动库清理] 删除 {table} 中 产品ID = {product_id} 的记录...")
             cursor.execute(sql, (product_id,))
@@ -2190,18 +2854,39 @@ def load_last_project():
 
         if project_id:
             print(f"自动加载最后使用的项目: {project_id}")
-            # 准备打开了 就更新一下
-            # 设置当前项目ID
-            bianl.current_project_id = project_id
-            print(f"current_project_id:{bianl.current_project_id}")
-            # 这里需要复制 open_project 函数中的加载逻辑
-            # 加载项目信息
+            # 0509新修改--项目路径变更处理
+            # 0515新修改-项目路径变更处理
+            # 加载项目信息；校验本机磁盘路径后再设置 current_project_id（避免路径被移动后仍误加载）
             conn_project = common_usage.get_mysql_connection_project()
             cursor_project = conn_project.cursor()
             cursor_project.execute("SELECT * FROM 项目需求表 WHERE 项目ID = %s", (project_id,))
             project_info = cursor_project.fetchone()
             cursor_project.close()
             conn_project.close()
+
+            if not project_info:
+                print(f"[AutoOpen] 未找到项目需求记录 project_id={project_id}")
+                new_project_button.prepare_new_project()
+                return
+
+            from modules.chanpinguanli import project_path_relocate
+            if not project_path_relocate.verify_last_session_path(project_id, project_info):
+                new_project_button.prepare_new_project()
+                tip = "上一次打开的项目在记录路径下未找到，可能已被移动。"
+                if (
+                    hasattr(bianl, "main_window")
+                    and bianl.main_window
+                    and hasattr(bianl.main_window, "line_tip")
+                    and bianl.main_window.line_tip
+                ):
+                    bianl.main_window.line_tip.setText(tip)
+                    bianl.main_window.line_tip.setToolTip(tip)
+                    bianl.main_window.line_tip.setStyleSheet("color: black;")
+                print(f"[AutoOpen] {tip}")
+                return
+
+            bianl.current_project_id = project_id
+            print(f"current_project_id:{bianl.current_project_id}")
 
             if project_info:
                 # 填充项目信息到UI
@@ -2323,11 +3008,11 @@ def load_last_project():
                         open_project.unlock_line_edit(bianl.approval_input)
                         open_project.unlock_line_edit(bianl.co_signature_input)
 
-                    # 自动调用on_product_row_clicked方法，获取第一行产品的id 改5
+                    # 自动调用 on_product_row_clicked；setCurrentCell 必须 blockSignals，否则会再触发一次 currentCellChanged 导致本地缺失弹窗重复
                     on_product_row_clicked(0, 1)
-                    # 显式设置产品表格的当前选中行
+                    bianl.product_table.blockSignals(True)
                     bianl.product_table.setCurrentCell(0, 0)
-                    # 确保bianl.row和bianl.colum被正确设置
+                    bianl.product_table.blockSignals(False)
                     bianl.row = 0
                     bianl.colum = 0
 

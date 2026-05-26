@@ -922,11 +922,11 @@ def setup_justlike_table(dialog: QDialog):
     #item_col1.setBackground(QBrush(QColor(240, 240, 240)))
     
     # 设置列宽：第一列固定宽度360，第二列可以拉伸自适应
-    table.setColumnWidth(0, 360)
+    table.setColumnWidth(0, 430)
     table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
     
     if table.columnCount() > 1:
-        table.setColumnWidth(1, 135)  # 设置初始宽度
+        table.setColumnWidth(1, 120)  # 设置初始宽度
         table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
     
     # 禁止水平滚动条
@@ -947,8 +947,8 @@ def setup_justlike_table(dialog: QDialog):
 def setup_second_tab_table(dialog: QDialog):
     """
     对第二个tab页的表格（zaihecanshu）进行设置：
-    - 第一列列宽设为400
-    - 第二列列宽设为180
+    - 第一列列宽设为430
+    - 第二列列宽设为120
     - 行高设为40（和第一个tab页一样）
     """
     if dialog is None:
@@ -994,14 +994,14 @@ def setup_second_tab_table(dialog: QDialog):
         if item_col1 is not None:
             item_col1.setTextAlignment(Qt.AlignCenter)
 
-    # 设置列宽：第一列固定宽度360，第二列可以拉伸自适应（参考第一个tab页的实现）
+    # 设置列宽：第一列固定宽度430，第二列可以拉伸自适应（参考第一个tab页的实现）
     # 第一列设置为固定宽度模式
-    table.setColumnWidth(0, 360)
+    table.setColumnWidth(0, 430)
     table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
     
     # 第二列设置为拉伸模式，可以自适应对话框宽度变化
     if table.columnCount() > 1:
-        table.setColumnWidth(1, 135)  # 设置初始宽度
+        table.setColumnWidth(1, 120)  # 设置初始宽度
         table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
 
     # 禁止水平滚动条
@@ -1074,14 +1074,14 @@ def init_pipe_openingload_dialog(dialog: QDialog, pipe_code: str = None, product
         # 移除可编辑和可选中标志，只保留可启用（参考 dynamically_adjust_ui.py 第504行）
         item.setFlags(item.flags() & ~Qt.ItemIsEditable & ~Qt.ItemIsSelectable)
     
-    # 设置列宽：第一列固定宽度180，第二列可以拉伸自适应
+    # 设置列宽：第一列固定宽度200，第二列可以拉伸自适应
     # 第一列设置为固定宽度模式
-    table.setColumnWidth(0, 180)
+    table.setColumnWidth(0, 200)
     table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
     
     # 第二列设置为拉伸模式，可以自适应对话框宽度变化
     if table.columnCount() > 1:
-        table.setColumnWidth(1, 400)  # 设置初始宽度
+        table.setColumnWidth(1, 500)  # 设置初始宽度
         table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
 
     # 禁止水平滚动条，视觉更干净

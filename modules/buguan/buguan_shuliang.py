@@ -106,12 +106,12 @@ def insert_tube_row_counts_to_db(sorted_centers: List[List[Tuple[float, float]]]
     try:
         with connection.cursor() as cursor:
             # 步骤1：清空整个表
-            truncate_sql = "TRUNCATE TABLE 产品设计活动表_布管数量表"
+            truncate_sql = "TRUNCATE TABLE 产品设计活动表_布管数量表_水平"
             cursor.execute(truncate_sql)
 
             # 步骤2：插入新数据
             insert_sql = '''
-                INSERT INTO 产品设计活动表_布管数量表
+                INSERT INTO 产品设计活动表_布管数量表_水平
                 (产品ID, 至水平中心线行号, 管孔数量（上）, 管孔数量（下）, 删除管孔位置)
                 VALUES (%s, %s, %s, %s, NULL)
             '''
@@ -121,7 +121,7 @@ def insert_tube_row_counts_to_db(sorted_centers: List[List[Tuple[float, float]]]
                 cursor.execute(insert_sql, (product_id, row_num, count, count))
 
         connection.commit()
-        print("✅ 成功写入产品设计活动表_布管数量表")
+        print("✅ 成功写入产品设计活动表_布管数量表_水平")
     except Exception as e:
         print(f"❌ 写入失败: {e}")
         connection.rollback()

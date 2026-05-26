@@ -1,0 +1,387 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1238</width>
+    <height>800</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>蓝科压力容器</string>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="verticalLayout_Main">
+    <property name="spacing">
+     <number>0</number>
+    </property>
+    <property name="leftMargin">
+     <number>0</number>
+    </property>
+    <property name="topMargin">
+     <number>0</number>
+    </property>
+    <property name="rightMargin">
+     <number>0</number>
+    </property>
+    <property name="bottomMargin">
+     <number>0</number>
+    </property>
+    <item>
+     <widget class="QFrame" name="topNavBar">
+      <property name="minimumSize">
+       <size>
+        <width>0</width>
+        <height>95</height>
+       </size>
+      </property>
+      <property name="maximumSize">
+       <size>
+        <width>16777215</width>
+        <height>95</height>
+       </size>
+      </property>
+      <property name="styleSheet">
+       <string>QFrame#topNavBar { background-color: white; border-bottom: 1px solid #C0C0C0; }
+QToolButton { background: transparent; border: 1px solid transparent; padding: 5px; font-size: 12px; min-width: 80px; }
+QToolButton:hover { background-color: #F0F0F0; border: 1px solid #D0D0D0; }
+QToolButton:checked { background-color: #FFEBCC; border: 1px solid #FFAD33; }
+QLabel#val_p_no, QLabel#val_d_no, QLabel#val_pr_no { font-weight: normal; color: #333; }
+QLabel#lb_p_no, QLabel#lb_d_no, QLabel#lb_pr_no { color: #666; font-size: 11px; }</string>
+      </property>
+      <layout class="QHBoxLayout" name="horizontalLayout_Nav">
+       <property name="spacing">
+        <number>5</number>
+       </property>
+       <property name="contentsMargins" stdset="0">
+        <number>5</number>
+       </property>
+       <item>
+        <widget class="QToolButton" name="btn_Project">
+         <property name="text">
+          <string>项目产品管理</string>
+         </property>
+         <property name="icon">
+          <iconset>
+           <normaloff>modules/chanpinguanli/icons/下箭头.png</normaloff>modules/chanpinguanli/icons/下箭头.png</iconset>
+         </property>
+         <property name="iconSize">
+          <size>
+           <width>32</width>
+           <height>32</height>
+          </size>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+         <property name="toolButtonStyle">
+          <enum>Qt::ToolButtonTextUnderIcon</enum>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QToolButton" name="btn_Input">
+         <property name="text">
+          <string>条件输入</string>
+         </property>
+         <property name="icon">
+          <iconset>
+           <normaloff>modules/chanpinguanli/icons/下箭头.png</normaloff>modules/chanpinguanli/icons/下箭头.png</iconset>
+         </property>
+         <property name="iconSize">
+          <size>
+           <width>32</width>
+           <height>32</height>
+          </size>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <property name="toolButtonStyle">
+          <enum>Qt::ToolButtonTextUnderIcon</enum>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QToolButton" name="btn_Component">
+         <property name="text">
+          <string>元件定义</string>
+         </property>
+         <property name="icon">
+          <iconset>
+           <normaloff>modules/chanpinguanli/icons/下箭头.png</normaloff>modules/chanpinguanli/icons/下箭头.png</iconset>
+         </property>
+         <property name="iconSize">
+          <size>
+           <width>32</width>
+           <height>32</height>
+          </size>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <property name="toolButtonStyle">
+          <enum>Qt::ToolButtonTextUnderIcon</enum>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QToolButton" name="btn_Nozzle">
+         <property name="text">
+          <string>管口附件定义</string>
+         </property>
+         <property name="icon">
+          <iconset>
+           <normaloff>modules/chanpinguanli/icons/下箭头.png</normaloff>modules/chanpinguanli/icons/下箭头.png</iconset>
+         </property>
+         <property name="iconSize">
+          <size>
+           <width>32</width>
+           <height>32</height>
+          </size>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <property name="toolButtonStyle">
+          <enum>Qt::ToolButtonTextUnderIcon</enum>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QToolButton" name="btn_Bundle">
+         <property name="text">
+          <string>管束设计</string>
+         </property>
+         <property name="icon">
+          <iconset>
+           <normaloff>modules/chanpinguanli/icons/下箭头.png</normaloff>modules/chanpinguanli/icons/下箭头.png</iconset>
+         </property>
+         <property name="iconSize">
+          <size>
+           <width>32</width>
+           <height>32</height>
+          </size>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <property name="toolButtonStyle">
+          <enum>Qt::ToolButtonTextUnderIcon</enum>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QToolButton" name="btn_Module">
+         <property name="text">
+          <string>模块化设计</string>
+         </property>
+         <property name="icon">
+          <iconset>
+           <normaloff>modules/chanpinguanli/icons/下箭头.png</normaloff>modules/chanpinguanli/icons/下箭头.png</iconset>
+         </property>
+         <property name="iconSize">
+          <size>
+           <width>32</width>
+           <height>32</height>
+          </size>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <property name="toolButtonStyle">
+          <enum>Qt::ToolButtonTextUnderIcon</enum>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QToolButton" name="btn_Calculation">
+         <property name="text">
+          <string>设计运算</string>
+         </property>
+         <property name="icon">
+          <iconset>
+           <normaloff>modules/chanpinguanli/icons/下箭头.png</normaloff>modules/chanpinguanli/icons/下箭头.png</iconset>
+         </property>
+         <property name="iconSize">
+          <size>
+           <width>32</width>
+           <height>32</height>
+          </size>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <property name="toolButtonStyle">
+          <enum>Qt::ToolButtonTextUnderIcon</enum>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QToolButton" name="btn_Drawing">
+         <property name="text">
+          <string>图纸绘制</string>
+         </property>
+         <property name="icon">
+          <iconset>
+           <normaloff>modules/chanpinguanli/icons/下箭头.png</normaloff>modules/chanpinguanli/icons/下箭头.png</iconset>
+         </property>
+         <property name="iconSize">
+          <size>
+           <width>32</width>
+           <height>32</height>
+          </size>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <property name="toolButtonStyle">
+          <enum>Qt::ToolButtonTextUnderIcon</enum>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QToolButton" name="btn_ReportOutput">
+         <property name="text">
+          <string>报告输出</string>
+         </property>
+         <property name="icon">
+          <iconset>
+           <normaloff>modules/chanpinguanli/icons/下箭头.png</normaloff>modules/chanpinguanli/icons/下箭头.png</iconset>
+         </property>
+         <property name="iconSize">
+          <size>
+           <width>32</width>
+           <height>32</height>
+          </size>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <property name="toolButtonStyle">
+          <enum>Qt::ToolButtonTextUnderIcon</enum>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QToolButton" name="btn_Config">
+         <property name="text">
+          <string>配置</string>
+         </property>
+         <property name="icon">
+          <iconset>
+           <normaloff>modules/chanpinguanli/icons/下箭头.png</normaloff>modules/chanpinguanli/icons/下箭头.png</iconset>
+         </property>
+         <property name="iconSize">
+          <size>
+           <width>32</width>
+           <height>32</height>
+          </size>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <property name="toolButtonStyle">
+          <enum>Qt::ToolButtonTextUnderIcon</enum>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <spacer name="horizontalSpacer">
+         <property name="orientation">
+          <enum>Qt::Horizontal</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>0</width>
+           <height>0</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+       <item>
+        <widget class="Line" name="line_sep">
+         <property name="minimumSize">
+          <size>
+           <width>1</width>
+           <height>40</height>
+          </size>
+         </property>
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QGridLayout" name="gridLayout_TopInfo">
+         <property name="leftMargin">
+          <number>10</number>
+         </property>
+         <property name="horizontalSpacing">
+          <number>25</number>
+         </property>
+         <item row="0" column="0">
+          <widget class="QLabel" name="lb_p_no">
+           <property name="text">
+            <string>项目编号：</string>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="0">
+          <widget class="QLabel" name="val_p_no">
+           <property name="text">
+            <string>006</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <widget class="QLabel" name="lb_d_no">
+           <property name="text">
+            <string>设备位号：</string>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="1">
+          <widget class="QLabel" name="val_d_no">
+           <property name="text">
+            <string>R-001</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="2">
+          <widget class="QLabel" name="lb_pr_no">
+           <property name="text">
+            <string>产品编号：</string>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="2">
+          <widget class="QLabel" name="val_pr_no">
+           <property name="text">
+            <string>PROD-001</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <widget class="QStackedWidget" name="stack_MainContent">
+      <widget class="QWidget" name="page_ProjectManagement"/>
+      <widget class="QWidget" name="page_ConditionInput"/>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

@@ -1,3 +1,4 @@
+import math
 import os
 from collections import OrderedDict
 from datetime import datetime
@@ -14,7 +15,7 @@ from openpyxl.cell import MergedCell
 from openpyxl.styles import Border, Side, Font
 from openpyxl.utils import get_column_letter
 import pymysql
-from modules.guankoudingyi.funcs.funcs_pipe_comboBox_value import get_component_nominal_size_od
+from modules.guankoudingyi.funcs.funcs_pipe_comboBox_value import get_component_nominal_size_od, get_nominal_diameter
 from modules.guankoudingyi.db_cnt import get_connection, db_config_2, db_config_1
 from modules.guankoudingyi.funcs.funcs_pipe_table import check_last_row_and_add_new, is_duplicate_port_code, delete_selected_pipe_rows
 
@@ -686,6 +687,7 @@ def validate_pipe_attachment(attachment_value, row):
     """
     验证管口附件是否合法：
     允许的值：接管法兰配对法兰、接管拉筋、防冲挡板、破涡器
+    支持多选，多个附件用分号";"分隔，如："接管法兰配对法兰;接管拉筋;破涡器"
     :param attachment_value: 原始附件文本
     :param row: 行号（用于错误信息）
     :return: (验证后的值, 错误信息列表)
@@ -696,11 +698,41 @@ def validate_pipe_attachment(attachment_value, row):
 
     allowed_attachments = {"接管法兰配对法兰", "接管拉筋", "防冲挡板", "破涡器"}
     attachment_text = str(attachment_value).strip()
-    if attachment_text in allowed_attachments:
+    
+    # 如果为空字符串，直接返回
+    if not attachment_text:
         return attachment_text, errors
-
-    errors.append(f"管口附件列，第{row}行数据不合法")
-    return "", errors
+    
+    # 支持多选：用分号";"分隔多个附件
+    # 先按分号拆分，去除每个附件的前后空格
+    attachment_list = [item.strip() for item in attachment_text.split(";") if item.strip()]
+    
+    # 如果没有有效的附件，返回错误
+    if not attachment_list:
+        errors.append(f"管口附件列，第{row}行数据不合法")
+        return "", errors
+    
+    # 验证每个附件是否在允许的列表中
+    invalid_attachments = []
+    for attachment in attachment_list:
+        if attachment not in allowed_attachments:
+            invalid_attachments.append(attachment)
+    
+    # 如果有不合法的附件，返回错误
+    if invalid_attachments:
+        errors.append(f"管口附件列，第{row}行数据不合法（包含不支持的附件：{', '.join(invalid_attachments)}）")
+        return "", errors
+    
+    # 所有附件都合法，返回用分号连接的值（去除重复，保持顺序）
+    # 使用 OrderedDict 保持顺序并去重
+    seen = set()
+    unique_attachments = []
+    for attachment in attachment_list:
+        if attachment not in seen:
+            seen.add(attachment)
+            unique_attachments.append(attachment)
+    
+    return ";".join(unique_attachments), errors
 
 
 """从Excel模板导入管口数据"""
@@ -1158,6 +1190,25 @@ def _parse_excel_data(worksheet, product_id=None):
             else:
                 pipe_belong_validated = pipe_belong_raw
 
+            # 锥壳：校验公称尺寸是否超出锥壳长度，超出则公称尺寸置空并按既有格式报错
+            if pipe_belong_validated and ("锥壳" in pipe_belong_validated) and nominal_size_validated:
+                current_od = get_component_nominal_size_od(
+                    nominal_size_validated, product_id=product_id, stats_widget=None
+                )
+                tube_ok, tube_nominal_diameter = get_nominal_diameter(product_id, "管箱")
+                shell_ok, shell_nominal_diameter = get_nominal_diameter(product_id, "壳体")
+                if (not tube_ok) or (tube_nominal_diameter is None):
+                    tube_nominal_diameter = 300
+                if (not shell_ok) or (shell_nominal_diameter is None):
+                    shell_nominal_diameter = 400
+                cone_length = (shell_nominal_diameter - tube_nominal_diameter) / math.tan(math.radians(30))
+                if cone_length < 0:
+                    cone_length = 0
+
+                if isinstance(current_od, (int, float)) and current_od > cone_length:
+                    nominal_size_validated = ""
+                    validation_errors.append(f"公称尺寸第{row}行数据不合法")
+
           
 
             # 获取轴向定位基准并验证
@@ -1477,7 +1528,7 @@ def validate_nominal_size_by_unit(nominal_size_value, unit_type, product_id, fla
         
         # 根据法兰标准添加筛选条件
         if flange_standard:
-            if flange_standard in ["HG/T 20615-2009", "HG/T 20592-2009","SH/T 3406-2022"]:
+            if flange_standard in ["HG/T 20615-2009","SH/T 3406-2022"]:
                 # DN≤600 或 NPS≤24
                 if unit_type == "DN":
                     base_sql += " AND CAST(`DN` AS UNSIGNED) <= 600"
@@ -1550,9 +1601,13 @@ def validate_weld_end_spec_by_unit(weld_end_spec_value, unit_type, product_id):
         elif unit_type == "mm":
             # mm单位：数据必须为数字
             try:
-                # 尝试转换为数字
-                float(weld_end_spec_value)
-                return weld_end_spec_value
+                if weld_end_spec_value.strip() == "程序推荐":
+                    return weld_end_spec_value
+                else:
+                    # 尝试转换为数字
+                    float(weld_end_spec_value)
+                    return weld_end_spec_value
+
             except (ValueError, TypeError):
                 return ""
         else:
@@ -1643,6 +1698,8 @@ def validate_pipe_belong_by_product_type(pipe_belong_value, product_id, pipe_fun
         # 获取产品类型和型式
         product_type, product_version = get_product_type_and_version(product_id)
         print("product_type: ", product_type)
+        print("product_version",product_version)
+
 
         if not product_type:
             return pipe_belong_value
@@ -1654,11 +1711,14 @@ def validate_pipe_belong_by_product_type(pipe_belong_value, product_id, pipe_fun
             "AES": ["管箱圆筒", "管箱平盖", "壳体圆筒", "外头盖圆筒", "外头盖封头","固定管板"],
             "BES": ["管箱圆筒", "管箱封头", "壳体圆筒", "外头盖圆筒", "外头盖封头","固定管板"],
             "NEN": ["前端管箱圆筒", "后端管箱圆筒", "壳体圆筒", "前端管箱平盖", "后端管箱平盖","前端管板","后端管板"],
-            "BEM": ["前端管箱圆筒", "后端管箱圆筒", "壳体圆筒", "前端管箱封头", "后端管箱封头","前端管板","后端管板"]
+            "BEM": ["前端管箱圆筒", "后端管箱圆筒", "壳体圆筒", "前端管箱封头", "后端管箱封头","前端管板","后端管板"],
+            "AEM": ["前端管箱圆筒", "后端管箱圆筒", "壳体圆筒", "前端管箱平盖", "后端管箱封头","前端管板","后端管板"],
+            "AKU": ["管箱圆筒", "管箱平盖", "壳程大端圆筒", "锥壳", "壳程封头"],
+            "BKU": ["管箱圆筒", "管箱封头", "壳程大端圆筒", "锥壳", "壳程封头"]
 
         }
 
-        # 特殊场景：管程入口/出口
+        # 特殊场景
         if pipe_function_value in ["管程入口", "管程出口"]:
             tube_allowed = {
                 "AEU": ["管箱圆筒", "管箱平盖"],
@@ -1667,11 +1727,23 @@ def validate_pipe_belong_by_product_type(pipe_belong_value, product_id, pipe_fun
                 "BES": ["管箱圆筒", "管箱封头"],
                 "NEN": ["前端管箱圆筒", "后端管箱圆筒", "前端管箱平盖", "后端管箱平盖"],
                 "BEM": ["前端管箱圆筒", "后端管箱圆筒", "前端管箱封头", "后端管箱封头"],
+                "AEM": ["前端管箱圆筒", "后端管箱圆筒", "前端管箱平盖", "后端管箱封头"],
+                "AKU": ["管箱圆筒", "管箱平盖"],
+                "BKU": ["管箱圆筒", "管箱封头"],
             }
             allowed_list = tube_allowed.get(product_version, [])
-        # 特殊场景：壳程入口/出口
+        elif pipe_function_value == "壳程入口" and product_version in ["AKU", "BKU"]:
+            allowed_list = ["壳程大端圆筒","锥壳"]
         elif pipe_function_value in ["壳程入口", "壳程出口"]:
-            allowed_list = ["壳体圆筒"]
+            if pipe_function_value == "壳程入口" and product_version in ["AKU", "BKU"]:
+              allowed_list = ["壳程大端圆筒","锥壳"]
+            else:
+              allowed_list = ["壳体圆筒"]
+        elif pipe_function_value in ["壳程气相出口", "壳程液相出口"] and product_version in ["AKU", "BKU"]:
+            allowed_list = ["壳程大端圆筒"]
+        elif pipe_function_value in ["壳程液位计1", "壳程液位计2","壳程温度计"] and product_version in ["AKU", "BKU"]:
+            allowed_list = ["壳程大端圆筒","壳程封头"]
+
         else:
             # 其他保持原有逻辑
             allowed_list = allowed_components.get(product_version, [])
@@ -1709,6 +1781,8 @@ def validate_axial_position_base(axial_position_base_value, pipe_belong_value, p
             "外头盖圆筒": ["左基准线", "右基准线"],
             "前端管箱圆筒": ["左基准线", "右基准线"],
             "后端管箱圆筒": ["左基准线", "右基准线"],
+            "壳程大端圆筒": ["左基准线", "右基准线"],
+            "锥壳": ["左基准线", "右基准线"],
 
             # 平盖类元件：平盖中心线
             "管箱平盖": ["平盖中心线"],
@@ -1718,6 +1792,7 @@ def validate_axial_position_base(axial_position_base_value, pipe_belong_value, p
             # 封头类元件：封头中心线
             "管箱封头": ["封头中心线"],
             "壳体封头": ["封头中心线"],
+            "壳程封头": ["封头中心线"],
             "外头盖封头": ["封头中心线"],
             "前端管箱封头": ["封头中心线"],
             "后端管箱封头": ["封头中心线"],
@@ -1872,12 +1947,45 @@ def validate_axial_position_distance(axial_distance_value, nominal_size_value, p
                     if isinstance(max_od, (int, float)):
                         max_distance = round(max_od * 2.5 - 0.5 * current_od, 2)
 
-        # 壳体圆筒
-        elif "壳体圆筒" in pipe_belong_str:
+        # 壳体圆筒、壳程大端
+        elif ("壳体圆筒" in pipe_belong_str)or("壳程大端圆筒"in pipe_belong_str):
+            tube_ok, tube_nominal_diameter = get_nominal_diameter(product_id, "管箱")
+            shell_ok, shell_nominal_diameter = get_nominal_diameter(product_id, "壳体")
+            if (not tube_ok) or (tube_nominal_diameter is None):
+                tube_nominal_diameter = 300
+            if (not shell_ok) or (shell_nominal_diameter is None):
+                shell_nominal_diameter = 400
+            cone_length = (shell_nominal_diameter - tube_nominal_diameter) /math.tan(math.radians(30))
+            if cone_length < 0:
+                cone_length = 0
+            if pipe_belong_value=="壳程大端圆筒":
+                min_distance = round(0.5 * current_od, 2)
+                tube_len = get_heat_exchanger_tube_length(product_id) if product_id else None
+                if isinstance(tube_len, (int, float)):
+                    max_distance = round(tube_len + 1 / 2 * shell_nominal_diameter - cone_length - 0.5 * current_od, 2)
+            else:
+                min_distance = round(0.5 * current_od, 2)
+                tube_len = get_heat_exchanger_tube_length(product_id) if product_id else None
+                if isinstance(tube_len, (int, float)):
+                    max_distance = round(tube_len + 1 / 2 * shell_nominal_diameter  - 0.5 * current_od, 2)
+        elif "锥壳"in pipe_belong_str:
             min_distance = round(0.5 * current_od, 2)
-            tube_len = get_heat_exchanger_tube_length(product_id) if product_id else None
-            if isinstance(tube_len, (int, float)):
-                max_distance = round(tube_len - 0.5 * current_od, 2)
+            tube_ok, tube_nominal_diameter = get_nominal_diameter(product_id, "管箱")
+            shell_ok, shell_nominal_diameter = get_nominal_diameter(product_id, "壳体")
+            if (not tube_ok) or (tube_nominal_diameter is None):
+                tube_nominal_diameter = 300
+            if (not shell_ok) or (shell_nominal_diameter is None):
+                shell_nominal_diameter = 400
+            cone_length = (shell_nominal_diameter - tube_nominal_diameter) / math.tan(math.radians(30))
+            if cone_length < 0:
+                cone_length = 0
+            if isinstance(cone_length, (int, float)):
+                max_distance = round(cone_length  - 0.5 * current_od, 2)
+
+
+
+
+
 
         else:
             # 其他类型暂不支持 → 置空
@@ -2074,6 +2182,7 @@ def validate_extension_height_with_error_info(extension_height_value, pipe_belon
     :return: (验证后的值, 错误信息列表)
     """
     try:
+
         if not extension_height_value:
             return extension_height_value, []
 
@@ -2089,7 +2198,11 @@ def validate_extension_height_with_error_info(extension_height_value, pipe_belon
             if not success:
                 return "", [f"外伸高度列，第{row}行，请先在条件输入界面填写公称直径"]
 
-            # 3. 验证外伸高度不能小于1/2公称直径
+            # 3. 如果外伸高度是"程序推荐"，且管口所属元件和公称直径都已填写，则允许
+            if extension_height_value.strip() == "程序推荐":
+                return extension_height_value, []
+
+            # 4. 验证外伸高度不能小于1/2公称直径
             try:
                 float_value = float(extension_height_value)
                 half_diameter = result / 2
@@ -2130,7 +2243,7 @@ def validate_flange_standard_with_error_info(flange_standard_value, row, pressur
             allowed_standards = ["HG/T 20615-2009", "HG/T 20623-2009(A)", "HG/T 20623-2009(B)","SH/T 3406-2022","SH/T 3406-2022(A)","SH/T 3406-2022(B)"]
         elif pressure_unit_type == "PN":
             # PN压力类型允许的法兰标准
-            allowed_standards = ["HG/T 20592-2009"]
+            allowed_standards = ["HG/T 20592-2009(A)","HG/T 20592-2009(B)"]
         else:
             # 如果没有指定压力类型，允许所有标准（兼容旧逻辑）
             allowed_standards = ["HG/T 20592-2009", "HG/T 20615-2009", "HG/T 20623-2009(A)", "HG/T 20623-2009(B)","SH/T 3406-2022","SH/T 3406-2022(A)","SH/T 3406-2022(B)"]

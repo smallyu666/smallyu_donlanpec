@@ -1,9 +1,79 @@
+#'''
+#10/23/2 修改，图片展示正常，一切功能正常。
+#选择NEN时可以自动展示b类图片，且图片显示正常；b、e、f类图片文字添加正常，均在左上角，且适应界面变化
 import os
-from PyQt5.QtCore import Qt, QSize
-from PyQt5.QtGui import QPixmap, QFont, QIcon, QPainter
+import traceback
+# 导入 QTimer
+from PyQt5.QtCore import Qt, QSize, QTimer, QRect
+from PyQt5.QtGui import QPixmap, QFont, QIcon, QPainter, QColor, QBrush
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea,
-                             QGridLayout, QFrame, QListWidget, QListWidgetItem, QLineEdit, QComboBox, QSizePolicy)
+                             QGridLayout, QFrame, QListWidget, QListWidgetItem, QLineEdit, QComboBox, QSizePolicy,
+                             QTableWidget, QTableWidgetItem, QHeaderView, QDialog, QApplication)
 import pymysql
+
+class ImagePreviewDialog(QDialog):
+    """显示可缩放大图的弹窗，支持 Ctrl+滚轮缩放"""
+
+    def __init__(self, image_path, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("图片预览")
+        self.resize(800, 600)
+
+        self._scale_factor = 1.0
+        self._original_pixmap = QPixmap(image_path)
+
+        self._label = QLabel()
+        self._label.setAlignment(Qt.AlignCenter)
+
+        if not self._original_pixmap.isNull():
+            self._label.setPixmap(self._original_pixmap)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(self._label)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(scroll_area)
+
+    def wheelEvent(self, event):
+        # 按住 Ctrl 时，使用滚轮缩放图片；否则交给默认滚动处理
+        if QApplication.keyboardModifiers() & Qt.ControlModifier and not self._original_pixmap.isNull():
+            delta = event.angleDelta().y()
+            if delta > 0:
+                self._scale_factor *= 1.1
+            elif delta < 0:
+                self._scale_factor /= 1.1
+
+            # 限制缩放范围
+            self._scale_factor = max(0.1, min(self._scale_factor, 10.0))
+
+            scaled = self._original_pixmap.scaled(
+                self._original_pixmap.size() * self._scale_factor,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+            self._label.setPixmap(scaled)
+        else:
+            super().wheelEvent(event)
+
+
+
+class NoWheelTableWidget(QTableWidget):
+    """自定义表格，禁用滚轮事件"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+    def wheelEvent(self, event):
+        pos = event.pos()
+        row = self.rowAt(pos.y())
+        column = self.columnAt(pos.x())
+
+        if 0 <= row < self.rowCount() and 0 <= column < self.columnCount():
+            cell_widget = self.cellWidget(row, column)
+            if cell_widget:
+                return
+
+        super().wheelEvent(event)
 
 
 def create_component_connection():
@@ -24,19 +94,82 @@ def create_component_connection():
         return None
 
 
-def get_plate_form_params(image_name):
-    """从管板形式表中获取参数"""
-    conn = create_component_connection()
-    if not conn:
-        return {}
-
+def create_product_connection():
+    """创建产品设计活动库数据库连接"""
     try:
-        with conn.cursor() as cursor:
-            # 根据图片名称构建管板类型
-            plate_type = os.path.splitext(image_name)[0]
-            plate_type = f"{plate_type}型管板"  # 直接构建管板类型，不进行额外拆分
+        return pymysql.connect(
+            host='localhost',
+            database='产品设计活动库',
+            user='root',
+            password='123456',
+            charset='utf8mb4',
+            cursorclass=pymysql.cursors.DictCursor
+        )
+    except pymysql.MySQLError as e:
+        from PyQt5.QtWidgets import QMessageBox
+        QMessageBox.critical(None, "数据库错误", f"连接产品设计活动库失败: {e}")
+        return None
 
-            # 查询数据库
+
+def get_plate_form_params(image_name, product_id=None):
+    """从管板形式表中获取参数，仿照tube_sheet_connection.py的多级查询逻辑"""
+    # 根据图片名称构建管板类型
+    plate_type = os.path.splitext(image_name)[0]
+    plate_type = f"{plate_type}"  # 直接构建管板类型，不进行额外拆分
+    
+    print(f"🔍 [调试] 查询管板形式参数，管板类型: '{plate_type}', 产品ID: '{product_id}'")
+    
+    # 步骤1：优先从产品设计活动库读取（如果有product_id）
+    if product_id:
+        prod_conn = create_product_connection()
+        if prod_conn:
+            try:
+                with prod_conn.cursor() as cursor:
+                    query = """
+                        SELECT 参数符号, 默认值
+                        FROM 产品设计活动表_管板形式表
+                        WHERE 产品ID = %s AND 管板类型 = %s
+                    """
+                    cursor.execute(query, (product_id, plate_type))
+                    params = cursor.fetchall()
+                    
+                    if params:
+                        print(f"✅ [调试] 从产品设计活动库找到 {len(params)} 个参数")
+                        # 处理查询结果 - 去重处理
+                        param_dict = {}
+                        seen_params = set()  # 用于去重
+                        
+                        for param in params:
+                            param_symbol = param['参数符号']
+                            param_value = param['默认值']
+                            
+                            # 只检查参数符号不为空，默认值可以为空字符串
+                            if param_symbol and param_symbol not in seen_params:
+                                seen_params.add(param_symbol)
+                                param_dict[param_symbol] = str(param_value) if param_value is not None else ""
+                                # print(f"✅ [调试] 添加参数: '{param_symbol}' = '{param_dict[param_symbol]}'")
+                            elif param_symbol in seen_params:
+                                print(f"🔄 [调试] 跳过重复参数: '{param_symbol}' = '{param_value}'")
+                            else:
+                                print(f"❌ [调试] 跳过空参数符号")
+                        
+                        # print(f"🔍 [调试] 最终参数字典包含 {len(param_dict)} 个参数")
+                        return param_dict
+                    else:
+                        print(f"🔍 [调试] 产品设计活动库中没有找到参数，将查询元件库")
+            except pymysql.Error as e:
+                print(f"❌ [调试] 产品设计活动库查询错误: {e}")
+            finally:
+                prod_conn.close()
+    
+    # 步骤2：如果产品库没有，从元件库读取
+    comp_conn = create_component_connection()
+    if not comp_conn:
+        print(f"❌ [调试] 无法连接元件库")
+        return {}
+    
+    try:
+        with comp_conn.cursor() as cursor:
             query = """
                 SELECT 参数符号, 默认值
                 FROM 管板形式表
@@ -44,32 +177,378 @@ def get_plate_form_params(image_name):
             """
             cursor.execute(query, (plate_type,))
             params = cursor.fetchall()
-
+            
+            print(f"🔍 [调试] 从元件库找到 {len(params)} 个参数")
+            
             # 处理查询结果
             param_dict = {}
             for param in params:
-                if param['参数符号'] and param['默认值']:
-                    param_dict[param['参数符号']] = param['默认值']
-
+                param_symbol = param['参数符号']
+                param_value = param['默认值']
+                print(f"🔍 [调试] 处理参数: '{param_symbol}' = '{param_value}' (类型: {type(param_value)})")
+                
+                # 只检查参数符号不为空，默认值可以为空字符串
+                if param_symbol:
+                    param_dict[param_symbol] = str(param_value) if param_value is not None else ""
+                    print(f"✅ [调试] 添加参数: '{param_symbol}' = '{param_dict[param_symbol]}'")
+                else:
+                    print(f"❌ [调试] 跳过空参数符号")
+            
+            print(f"🔍 [调试] 最终参数字典包含 {len(param_dict)} 个参数")
             return param_dict
     except pymysql.Error as e:
-        print(f"数据库错误: {e}")
+        print(f"❌ [调试] 元件库查询错误: {e}")
         return {}
     finally:
-        conn.close()
+        comp_conn.close()
+
+
+# -----------------------------------------------------------------
+# ✅ 解决方案：自定义 ImageLabel 类
+# -----------------------------------------------------------------
+class ImageLabel(QLabel):
+    """
+    一个自定义 QLabel, 它总是将图像居中显示，并将指定文本绘制在左上角。
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._pixmap = QPixmap()
+        self._overlay_text = ""
+        # 默认字体和颜色
+        self._text_font = QFont("Arial", 12, QFont.Bold)
+        self._text_color = QColor(0, 60, 200)
+
+    def setPixmap(self, pixmap):
+        """存储原始 pixmap 并触发重绘"""
+        self._pixmap = pixmap
+        self.update()  # 请求重绘
+
+    def setText(self, text):
+        """存储文本并触发重绘"""
+        self._overlay_text = text
+        self.update() # 请求重绘
+
+    def clear(self):
+        """清除 pixmap 和文本"""
+        super().clear()
+        self._pixmap = QPixmap()
+        self._overlay_text = ""
+        self.update()
+
+    # def paintEvent(self, event):
+    #     """
+    #     重写绘制事件，在调整大小时自动重新计算布局。
+    #     """
+    #     # 1. 首先调用父类的 paintEvent 来绘制边框、背景等 (来自Stylesheet)
+    #     super().paintEvent(event)
+        
+    #     # 如果没有 pixmap，则不执行任何操作
+    #     if self._pixmap.isNull():
+    #         return
+
+    #     painter = QPainter(self)
+    #     painter.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
+
+    #     # 2. 绘制居中的图像
+    #     # 获取 QLabel 的当前矩形区域
+    #     label_rect = self.rect()
+        
+    #     # 缩放图像以适应 QLabel (减去边距)，保持宽高比
+    #     scaled_pixmap = self._pixmap.scaled(
+    #         label_rect.size() - QSize(10, 10), # 留出 5px 边距
+    #         Qt.KeepAspectRatio,
+    #         Qt.SmoothTransformation
+    #     )
+
+    #     # 计算居中绘制的坐标 (x, y)
+    #     img_x = (label_rect.width() - scaled_pixmap.width()) // 2
+    #     img_y = (label_rect.height() - scaled_pixmap.height()) // 2
+
+    #     # 绘制图像
+    #     painter.drawPixmap(img_x, img_y, scaled_pixmap)
+
+    #     # 3. 绘制左上角的文本
+    #     if self._overlay_text:
+    #         painter.setFont(self._text_font)
+    #         painter.setPen(self._text_color)
+            
+    #         fm = painter.fontMetrics()
+            
+    #         # 真正锚定在 (2, 2)
+    #         margin_x = 2
+    #         text_y = 2 + fm.ascent() # Y 坐标是基于字体的基线
+            
+    #         painter.drawText(margin_x, text_y, self._overlay_text)
+
+    #     painter.end()
+    def paintEvent(self, event):
+        """
+        重写绘制事件：图片居中、多行文字绘制，支持缩进(\t)。
+        """
+        super().paintEvent(event)
+
+        if self._pixmap.isNull():
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing | QPainter.SmoothPixmapTransform)
+
+        # ========== 1. 绘制居中图像 ==========
+        label_rect = self.rect()
+        scaled_pixmap = self._pixmap.scaled(
+            label_rect.size() - QSize(10, 10),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation
+        )
+        img_x = (label_rect.width() - scaled_pixmap.width()) // 2
+        img_y = (label_rect.height() - scaled_pixmap.height()) // 2
+        painter.drawPixmap(img_x, img_y, scaled_pixmap)
+
+        # ========== 2. 绘制左上角文本（支持 \n + \t 缩进） ==========
+        if self._overlay_text:
+            painter.setFont(self._text_font)
+            painter.setPen(self._text_color)
+
+            margin_x = 8   # 左边距
+            margin_y = 6    # 上边距
+            line_spacing = painter.fontMetrics().lineSpacing()
+            tab_width = 32  # 每个 \t 缩进宽度（像素）
+
+            # 手动逐行绘制（因为 Qt 不处理 \t 缩进）
+            lines = self._overlay_text.split("\n")
+            y = margin_y
+
+            for line in lines:
+                # 计算制表符数量并移除它们
+                tabs = line.count("\t")
+                text = line.replace("\t", "")
+
+                # 根据制表符数量偏移起点
+                x_offset = margin_x + tabs * tab_width
+                painter.drawText(x_offset, y + painter.fontMetrics().ascent(), text)
+
+                # 下一行
+                y += line_spacing
+
+        painter.end()
+
+# -----------------------------------------------------------------
 
 
 class SheetFormPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent = parent  # 保存父窗口引用
+        # 标记图片下拉框是否已在初始时自动弹出
+        self._sheet_form_combo_popup_done = False
         self.sheet_form_param_layout = None
         self.sheet_form_image_labels = []
         self.sheet_form_current_images = []  # 初始化图片列表
+        self.DN = None  # 初始化全局变量：公称直径 DN
+        self.Di = None  # 初始化全局变量：壳体内直径 Dis
+        self.use_outer_diameter_base = None  # "是否以外径为基准"的当前值
+        self.DL = None  # 布管限定圆 DL
+        # 参数表程序化更新保护：避免初始化/联动时误判为“手动修改”
+        self._sheet_form_programmatic_update = False
         self.setup_ui()
         # 确保布局已初始化
         if self.sheet_form_param_layout is None:
             self._init_fallback_param_layout()
+
+    def showEvent(self, event):
+        """仅在页面第一次真正显示时，让图片下拉框处于弹出状态。"""
+        super().showEvent(event)
+        try:
+            # 页面显示时先按 heat_exchanger 规则刷新一次“管板型式可编辑性”
+            self._apply_plate_type_rule()
+            if (not self._sheet_form_combo_popup_done
+                    and hasattr(self, 'sheet_form_connection_type_combo')
+                    and self.sheet_form_connection_type_combo is not None
+                    and self.sheet_form_connection_type_combo.isEnabled()):
+                self.sheet_form_connection_type_combo.showPopup()
+                self._sheet_form_combo_popup_done = True
+        except Exception:
+            pass
+
+    def _resolve_plate_type_rule(self, heat_exchanger):
+        """根据产品型式返回(默认管板型式, 是否允许用户修改)。"""
+        hx = str(heat_exchanger or "").strip().upper()
+        # 默认：a型，可修改（兜底）
+        default_type = "a"
+        allow_modify = True
+
+        # 固定 a 型，不允许修改
+        if hx in {"AES", "BES", "AKU", "BKU"}:
+            return "a", False
+        # a 型，允许修改
+        if hx in {"AEU", "BEU"}:
+            return "a", True
+        # 固定 b 型，不允许修改
+        if hx in {"NEN"}:
+            return "b", False
+        # 固定 e 型，不允许修改
+        if hx in {"AEM", "BEM"}:
+            return "e", False
+
+        return default_type, allow_modify
+
+    def _apply_plate_type_rule(self, saved_plate_type=None):
+        """按 heat_exchanger 规则设置下拉框默认值及可编辑性。"""
+        try:
+            if not hasattr(self, "sheet_form_connection_type_combo") or self.sheet_form_connection_type_combo is None:
+                return
+
+            connection_type_images = ['a', 'b', 'c', 'd', 'e', 'f']
+            parent_value = getattr(self.parent, "heat_exchanger", None)
+            target_type, allow_modify = self._resolve_plate_type_rule(parent_value)
+
+            # 可修改时：优先已保存值；不可修改时：强制规则值
+            selected_type = target_type
+            if allow_modify:
+                if saved_plate_type and saved_plate_type in connection_type_images:
+                    selected_type = saved_plate_type
+
+            if selected_type not in connection_type_images:
+                selected_type = target_type if target_type in connection_type_images else "a"
+
+            target_index = connection_type_images.index(selected_type)
+
+            self.sheet_form_connection_type_combo.blockSignals(True)
+            self.sheet_form_connection_type_combo.setCurrentIndex(target_index)
+            self.sheet_form_connection_type_combo.blockSignals(False)
+
+            # 不允许修改时禁用下拉框，防止用户修改管板型式
+            self.sheet_form_connection_type_combo.setEnabled(allow_modify)
+            if not allow_modify:
+                self._sheet_form_combo_popup_done = True
+
+            # 同步刷新图片区域
+            self.sheet_form_updates_image_path(target_index)
+
+            print(
+                f"[sheet_form_page] 规则应用: heat_exchanger={parent_value}, "
+                f"target_type={target_type}, selected_type={selected_type}, allow_modify={allow_modify}"
+            )
+        except Exception as e:
+            print(f"[sheet_form_page] 应用管板型式规则失败: {e}")
+            traceback.print_exc()
+
+    def _mark_sheet_form_value_blue(self, row, col=1):
+        """将参数值单元格标记为蓝色（仿 My_Piping 的手动修改高亮）。"""
+        try:
+            if not hasattr(self, "sheet_form_param_table") or self.sheet_form_param_table is None:
+                return
+            item = self.sheet_form_param_table.item(row, col)
+            if item:
+                item.setForeground(QBrush(QColor(70, 130, 180)))
+        except Exception:
+            pass
+
+    def _on_sheet_form_param_item_changed(self, item):
+        """参数表手动改值后高亮蓝色。"""
+        try:
+            if getattr(self, "_sheet_form_programmatic_update", False):
+                return
+            if not item:
+                return
+            # 仅处理“参数值列”
+            if item.column() != 1:
+                return
+            # 仅处理可编辑项
+            flags = item.flags()
+            if not (flags & Qt.ItemIsEditable):
+                return
+            self._mark_sheet_form_value_blue(item.row(), 1)
+        except Exception:
+            pass
+
+    def _get_saved_plate_type(self):
+        """从产品设计活动表_管板形式表中，根据产品ID查询已保存的管板类型"""
+        product_id = self.get_product_id()
+        if not product_id:
+            return None
+
+        conn = create_product_connection()
+        if not conn:
+            return None
+
+        try:
+            with conn.cursor() as cursor:
+                sql = """
+                    SELECT 管板类型
+                    FROM 产品设计活动表_管板形式表
+                    WHERE 产品ID = %s
+                    LIMIT 1
+                """
+                print(f"[sheet_form_page] 自动选择已保存管板形式 - SQL: {sql}")
+                cursor.execute(sql, (product_id,))
+                row = cursor.fetchone()
+                if not row:
+                    print("[sheet_form_page] 自动选择已保存管板形式 - 未找到该产品ID的记录")
+                    return None
+
+                raw_type = row.get("管板类型") if isinstance(row, dict) else row[0]
+                plate_type = str(raw_type).strip() if raw_type is not None else ""
+
+                # 规范化管板类型：去掉“型管板”等后缀，只保留前缀字母
+                if plate_type:
+                    plate_type = plate_type.replace("型管板", "").strip()
+                    if plate_type:
+                        plate_type = plate_type[0].lower()
+
+                print(f"[sheet_form_page] 自动选择已保存管板形式 - 原始类型: {raw_type}, 规范化后: {plate_type}")
+                return plate_type or None
+        except Exception as e:
+            print(f"[sheet_form_page] 自动选择已保存管板形式时发生错误: {e}")
+            traceback.print_exc()
+            return None
+        finally:
+            conn.close()
+
+    def _get_saved_plate_node(self):
+        """从产品设计活动表_管板形式表中，根据产品ID查询已保存的具体节点名。
+
+        这里直接使用 "管板类型" 原始值作为节点名（去掉"型管板"等后缀），
+        以便与图片文件名（如 b_h.png → b_h）一一对应。
+        """
+        product_id = self.get_product_id()
+        if not product_id:
+            return None
+
+        conn = create_product_connection()
+        if not conn:
+            return None
+
+        try:
+            with conn.cursor() as cursor:
+                sql = """
+                    SELECT 管板类型
+                    FROM 产品设计活动表_管板形式表
+                    WHERE 产品ID = %s
+                    LIMIT 1
+                """
+                print(f"[sheet_form_page] 自动选择已保存管板节点 - SQL: {sql}")
+                cursor.execute(sql, (product_id,))
+                row = cursor.fetchone()
+                if not row:
+                    print("[sheet_form_page] 自动选择已保存管板节点 - 未找到该产品ID的记录")
+                    return None
+
+                raw_type = row.get("管板类型") if isinstance(row, dict) else row[0]
+                node_name = str(raw_type).strip() if raw_type is not None else ""
+
+                # 去掉可能的中文后缀（如 "型管板"），保留完整节点名（如 b_h）
+                if node_name:
+                    node_name = node_name.replace("型管板", "").strip()
+
+                print(f"[sheet_form_page] 自动选择已保存管板节点 - 原始类型: {raw_type}, 节点名: {node_name}")
+                return node_name or None
+        except Exception as e:
+            print(f"[sheet_form_page] 自动选择已保存管板节点时发生错误: {e}")
+            traceback.print_exc()
+            return None
+        finally:
+            conn.close()
 
     def _init_fallback_param_layout(self):
         """创建备用布局，防止初始化失败"""
@@ -228,124 +707,177 @@ class SheetFormPage(QWidget):
             # 左侧图片展示区
             image_frame = QFrame()
             image_frame.setStyleSheet("background-color: #f5f5f5; border-radius: 8px;")
-            image_layout = QGridLayout(image_frame)
-            image_layout.setSpacing(20)
-            image_layout.setContentsMargins(15, 15, 15, 15)
+            self.image_layout = QGridLayout(image_frame)
+            self.image_layout.setSpacing(20)
+            self.image_layout.setContentsMargins(15, 15, 15, 15)
 
             # 初始化图片标签
             self.sheet_form_image_labels = []
 
-            # 创建图片标签
+            # 创建图片标签 - 恢复原来的6个
             for i in range(6):
-                label = QLabel()
-                label.setAlignment(Qt.AlignCenter)
-                label.setMinimumSize(280, 200)
+                # ✅ 解决方案：使用我们自定义的 ImageLabel
+                label = ImageLabel() 
+                
+                # 关键：设置最小尺寸，这是我们缩放的依据，增加高度以匹配右侧参数区
+                label.setMinimumSize(280, 250)
                 label.setStyleSheet("""
-                    QLabel {
+                    ImageLabel {
                         border: 2px solid #ddd;
                         border-radius: 6px;
                         background-color: white;
                     }
-                    QLabel:hover {
+                    ImageLabel:hover {
                         border: 2px solid #4CAF50;
                     }
-                    QLabel[selected=true] {
+                    ImageLabel[selected=true] {
                         border: 3px solid #2196F3;
+                    }
+                    ImageLabel[selected=true][special_b_b=true] {
+                        border: 3px solid #888888;
                     }
                 """)
                 label.setProperty("selected", False)
+                label.setProperty("special_b_b", False)
                 label.setProperty("index", i)
 
                 # 使用lambda绑定正确的索引
                 label.mousePressEvent = lambda event, idx=i: self._handle_image_click(event, idx)
+                label.mouseDoubleClickEvent = lambda event, idx=i: self._handle_image_double_click(event, idx)
 
                 self.sheet_form_image_labels.append(label)
-                image_layout.addWidget(label, i // 3, i % 3)
+                self.image_layout.addWidget(label, i // 3, i % 3)
 
-            body_layout.addWidget(image_frame, 2)
+            # 将图片容器添加到滚动区域
+            self.image_scroll_area = QScrollArea()
+            self.image_scroll_area.setWidgetResizable(True)
+            self.image_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            self.image_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            self.image_scroll_area.setStyleSheet("background-color: #f5f5f5; border-radius: 8px;")
+            self.image_scroll_area.setWidget(image_frame)
+            body_layout.addWidget(self.image_scroll_area, 2)
 
-            # 右侧参数展示区
-            scroll_area = QScrollArea()
-            scroll_area.setWidgetResizable(True)
-            scroll_area.setStyleSheet("""
-                QScrollArea {
-                    border: none;
-                    background-color: #f9f9f9;
-                    border-radius: 8px;
-                }
-                QScrollBar:vertical {
-                    width: 10px;
-                    background: #f1f1f1;
-                    margin: 0px;
-                    border-radius: 5px;
-                }
-                QScrollBar::handle:vertical {
-                    background: #c1c1c1;
-                    min-height: 20px;
-                    border-radius: 5px;
-                }
-                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                    height: 0px;
-                }
-            """)
-
+            # 右侧参数展示区 - 完全照搬tube_sheet_connection.py的样式
             self.sheet_form_param_frame = QFrame()
             self.sheet_form_param_frame.setStyleSheet("""
                 QFrame {
                     background-color: #f9f9f9;
                     border-radius: 8px;
                 }
-                QLabel {
-                    font-size: 20px;  
-                    margin-bottom: 8px;
-                    font-weight: 500;
-                }
-                QLineEdit {
-                    font-size: 25px;  
-                    padding: 10px;  
-                    border: 1px solid #ddd;
-                    border-radius: 5px;
-                    margin-bottom: 12px;
-                    min-height: 40px;  
-                }
             """)
-
-            # 正确初始化布局为QVBoxLayout
             self.sheet_form_param_layout = QVBoxLayout(self.sheet_form_param_frame)
-            self.sheet_form_param_layout.setContentsMargins(18, 18, 18, 18)
-            self.sheet_form_param_layout.setSpacing(18)
-            self.sheet_form_param_layout.addWidget(QLabel("请选择左侧图片查看参数"))
+            self.sheet_form_param_layout.setContentsMargins(15, 15, 15, 15)
+            self.sheet_form_param_layout.setSpacing(15)
 
-            scroll_area.setWidget(self.sheet_form_param_frame)
-            body_layout.addWidget(scroll_area, 1)
+            # 创建参数表格 - 完全照搬tube_sheet_connection.py的样式
+            self.sheet_form_param_table = NoWheelTableWidget()
+            self.sheet_form_param_table.setColumnCount(2)
+            # 注释掉表头
+            self.sheet_form_param_table.verticalHeader().setVisible(False)
+            self.sheet_form_param_table.horizontalHeader().setVisible(False)  # 隐藏水平表头
+            
+            # 设置列宽自适应策略 - 照搬tube_sheet_connection.py
+            self.sheet_form_param_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+            self.sheet_form_param_table.horizontalHeader().setDefaultSectionSize(100)
+            self.sheet_form_param_table.horizontalHeader().setMinimumSectionSize(10)
+            
+            # 为各列设置不同的调整策略
+            # 这里希望“参数值”列更宽（约 3:7），且允许用户拖动调整，因此两列都用 Interactive
+            self.sheet_form_param_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Interactive)
+            self.sheet_form_param_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
+            
+            # 设置初始列宽比例 - 照搬tube_sheet_connection.py
+            def set_initial_column_widths():
+                total_width = self.sheet_form_param_table.viewport().width()
+                if total_width > 0:
+                    # 初始比例：参数名30%，参数值70%（参数值列加宽，约 3:7）
+                    self.sheet_form_param_table.setColumnWidth(0, int(total_width * 0.3))  # 参数名
+                    self.sheet_form_param_table.setColumnWidth(1, int(total_width * 0.7))  # 参数值
+            
+            # 在表格显示后设置初始列宽
+            self.sheet_form_param_table.showEvent = lambda event: set_initial_column_widths()
+            # 参数值手动修改后高亮蓝色（仿 My_Piping）
+            self.sheet_form_param_table.itemChanged.connect(self._on_sheet_form_param_item_changed)
+            
+            self.sheet_form_param_layout.addWidget(self.sheet_form_param_table)
+            body_layout.addWidget(self.sheet_form_param_frame, 1)
             main_layout.addLayout(body_layout)
 
-            # 最后再调用更新方法
-            self.sheet_form_updates_image_path(0)
+            #
+            # 延迟检查父窗口的 heat_exchanger 值
+            # 延迟检查父窗口的 heat_exchanger 值，并优先使用已保存的管板类型
+            def _delayed_check_heat_exchanger():
+                try:
+                    # 进入管板形式页面时，先从布管界面刷新一次关键参数
+                    try:
+                        self.get_DN_and_Di_from_parent()
+                    except Exception:
+                        pass
+
+                    # 1. 优先从产品设计活动表_管板形式表中获取已保存的管板类型
+                    saved_plate_type = self._get_saved_plate_type()
+                    print(f"[DEBUG 延迟检查] 已保存的管板类型: {saved_plate_type}")
+                    # 2. 依据 heat_exchanger 规则设置默认管板型式及可编辑性
+                    self._apply_plate_type_rule(saved_plate_type=saved_plate_type)
+
+                    # 4. 如果当前有图片，优先根据已保存节点模拟点击，自动加载参数
+                    if self.sheet_form_current_images and len(self.sheet_form_image_labels) > 0:
+                        target_node = self._get_saved_plate_node()
+                        print(f"[DEBUG 延迟检查] 已保存的管板节点: {target_node}")
+
+                        click_index = 0
+                        if target_node:
+                            for idx, img_path in enumerate(self.sheet_form_current_images):
+                                base = os.path.splitext(os.path.basename(str(img_path)))[0]
+                                if base == target_node:
+                                    click_index = idx
+                                    break
+
+                        # 等价于用户单击对应图，加载参数表
+                        self._handle_image_click(None, click_index)
+
+                except Exception as e:
+                    print(f"[DEBUG 延迟检查] 发生异常: {e}")
+                    traceback.print_exc()
+            # 延迟 100 毫秒执行
+            QTimer.singleShot(100, _delayed_check_heat_exchanger)
+            #
 
         except Exception as e:
             print(f"创建管板形式页面时发生致命错误: {str(e)}")
-            import traceback
             traceback.print_exc()
             # 异常时确保布局有默认值
             self._init_fallback_param_layout()
 
     def get_product_id(self):
+        # 方法内容保持不变
         try:
             if hasattr(self.parent, 'productID'):
                 product_id = self.parent.productID
+                heat_exchanger = self.parent.heat_exchanger
+                print(f"[sheet_form_page] 从My_Piping获取到的productID: {product_id}")
+                print(f"[sheet_form_page] 从My_Piping获取到的热交换器类型: {heat_exchanger}")
                 if product_id:
                     return product_id
                 else:
+                    print(f"[sheet_form_page] productID为空")
                     return None
             else:
+                print(f"[sheet_form_page] parent没有productID属性")
                 return None
         except Exception as e:
+            print(f"[sheet_form_page] 获取productID时出错: {e}")
             return None
 
     def _handle_image_click(self, event, index):
         # 方法内容保持不变
         try:
+            # 每次点击图片前，尝试从父窗口刷新一次关键参数（DN、Di、是否以外径为基准、DL）
+            try:
+                self.get_DN_and_Di_from_parent()
+            except Exception:
+                pass
+
             if index >= len(self.sheet_form_image_labels):
                 return
 
@@ -354,6 +886,7 @@ class SheetFormPage(QWidget):
             # 重置所有图片的选中状态
             for lbl in self.sheet_form_image_labels:
                 lbl.setProperty("selected", False)
+                lbl.setProperty("special_b_b", False)
                 lbl.style().unpolish(lbl)
                 lbl.style().polish(lbl)
 
@@ -370,50 +903,225 @@ class SheetFormPage(QWidget):
             # 获取点击的图片路径
             clicked_image_path = self.sheet_form_current_images[index]
             clicked_image = os.path.basename(clicked_image_path)
+            
+            # 输出选中的图片名称（不带扩展名）
+            image_name_without_ext = os.path.splitext(clicked_image)[0]
+            print(f"选中节点: {image_name_without_ext}")
+            
+            # 输出产品ID
+            product_id = self.get_product_id()
+            print(f"当前产品ID: {product_id}")
+
+            # 获取当前下拉框选中的文件夹名称
+            connection_type_images = ['a', 'b', 'c', 'd', 'e', 'f']
+            selected_folder = connection_type_images[current_index] if current_index < len(connection_type_images) else ""
+
+            # 判断是否为 b 类中的 b_b 节点，用于控制选中时的边框颜色
+            is_b_b_node = (selected_folder == 'b' and image_name_without_ext == 'b_b')
+            label.setProperty("special_b_b", is_b_b_node)
+            label.style().unpolish(label)
+            label.style().polish(label)
+
+            # 若为 b_b 节点，仿照 My_Piping.show_distance 提示“该节点暂不可用”
+            if is_b_b_node and self.parent is not None and hasattr(self.parent, "line_tip"):
+                try:
+                    message = "该节点暂不可用"
+                    line_tip = self.parent.line_tip
+                    line_tip.setText(message)
+                    line_tip.setStyleSheet("color: black;")
+                    line_tip.setVisible(True)
+                    from PyQt5.QtCore import QTimer
+                    QTimer.singleShot(5000, lambda: line_tip.setText(""))
+                except Exception:
+                    pass
 
             # 清空右侧参数区域
             self._clear_param_layout()
 
-            # 根据选择的图片显示对应的参数输入框
-            params = get_plate_form_params(clicked_image)
+            # 根据选择的图片显示对应的参数 - 使用表格形式
+            # 获取产品ID
+            product_id = self.get_product_id()
+            params = get_plate_form_params(clicked_image, product_id)
             if params:
-                # 创建参数输入框
-                for param_name, default_value in params.items():
-                    param_layout = QHBoxLayout()
+                # 每次填充前清除单元格合并状态
+                self.sheet_form_param_table.clearSpans()
 
-                    # 参数名称标签
-                    label = QLabel(param_name + ":")
-                    label.setFixedWidth(120)  # 增加宽度防止文字被截断
-                    param_layout.addWidget(label)
+                # 默认使用两列表格
+                self.sheet_form_param_table.setColumnCount(2)
 
-                    # 参数输入框
-                    line_edit = QLineEdit(str(default_value))  # 确保是字符串类型
-                    line_edit.setObjectName(f"param_{param_name}")
-                    param_layout.addWidget(line_edit)
+                # 设置表格行数
+                self.sheet_form_param_table.setRowCount(len(params))
 
-                    self.sheet_form_param_layout.addLayout(param_layout)
+                # 填充表格数据（程序化更新期间不触发“手动修改变蓝”）
+                self._sheet_form_programmatic_update = True
+                try:
+                    for row, (param_name, default_value) in enumerate(params.items()):
+                        # e_g / f_g 管板：c1 + c2 在界面上合并为参数 c（一行）
+                        if (
+                            selected_folder in ("e", "f")
+                            and image_name_without_ext in ("e_g", "f_g")
+                            and param_name in ("c1", "c2")
+                        ):
+                            # 只在遇到 c1 时生成一行 c，c2 行跳过
+                            if param_name == "c2":
+                                continue
+
+                            name_item = QTableWidgetItem("c")
+                            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+                            self.sheet_form_param_table.setItem(row, 0, name_item)
+
+                            c1_raw = str(params.get("c1", "1.5")).strip() or "1.5"
+                            c2_raw = str(params.get("c2", "25")).strip() or "25"
+                            container = QWidget()
+                            layout = QHBoxLayout(container)
+                            layout.setContentsMargins(0, 0, 0, 0)
+                            layout.setSpacing(2)
+                            layout.setAlignment(Qt.AlignLeft)
+
+                            left_edit = QLineEdit(c1_raw, container)
+                            left_edit.setFixedWidth(60)
+                            left_edit.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+                            mid_label = QLabel("*δ和", container)
+                            mid_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+                            right_edit = QLineEdit(c2_raw, container)
+                            right_edit.setFixedWidth(60)
+                            right_edit.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+                            tail_label = QLabel("的较大值", container)
+                            tail_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+
+                            layout.addWidget(left_edit)
+                            layout.addWidget(mid_label)
+                            layout.addWidget(right_edit)
+                            layout.addWidget(tail_label)
+
+                            # 用户手动编辑 c1/c2 时，改为蓝色
+                            left_edit.textEdited.connect(
+                                lambda _txt, le=left_edit: le.setStyleSheet("color: rgb(70,130,180);")
+                            )
+                            right_edit.textEdited.connect(
+                                lambda _txt, re=right_edit: re.setStyleSheet("color: rgb(70,130,180);")
+                            )
+
+                            self.sheet_form_param_table.setCellWidget(row, 1, container)
+                            continue
+
+                        # 通用逻辑：参数名列 - 只读
+                        name_item = QTableWidgetItem(param_name)
+                        name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+                        self.sheet_form_param_table.setItem(row, 0, name_item)
+
+                        # 对于 e_f、f_f 节点，如果参数名为 a，则根据公式重新计算默认值
+                        adjusted_value = default_value
+                        if (
+                            param_name == "a"
+                            and selected_folder in ["e", "f"]
+                            and image_name_without_ext in ["e_f", "f_f"]
+                        ):
+                            try:
+                                dl = self.DL
+                                dn = self.DN
+                                di = self.Di
+                                flag = (self.use_outer_diameter_base or "").strip()
+                                if flag == "否" and dl is not None and dn is not None:
+                                    adjusted_value = (dn - dl) / 4.0
+                                elif flag == "是" and dl is not None and di is not None:
+                                    adjusted_value = (di - dl) / 4.0
+                                if isinstance(adjusted_value, (int, float)):
+                                    adjusted_value = f"{adjusted_value:.3f}"
+                            except Exception as calc_err:
+                                print(f"计算 a 默认值时出错: {calc_err}")
+
+                        # 参数值列
+                        display_text = str(adjusted_value)
+                        value_item = QTableWidgetItem(display_text)
+                        if selected_folder == 'b' and image_name_without_ext == 'b_b':
+                            value_item.setFlags(value_item.flags() & ~Qt.ItemIsEditable & ~Qt.ItemIsEnabled)
+                        else:
+                            value_item.setFlags(Qt.ItemIsEditable | Qt.ItemIsEnabled)
+                        value_item.setForeground(QBrush(QColor(0, 0, 0)))
+                        self.sheet_form_param_table.setItem(row, 1, value_item)
+
+                    # 对于 e_b、e_c、f_b、f_c 节点，特殊处理最后一行为三列显示，并在表格下方添加说明文字
+                    special_three_col_nodes = {
+                        'e': ['e_b', 'e_c'],
+                        'f': ['f_b', 'f_c']
+                    }
+                    if (
+                        selected_folder in special_three_col_nodes
+                        and image_name_without_ext in special_three_col_nodes[selected_folder]
+                        and self.sheet_form_param_table.rowCount() > 0
+                    ):
+                        total_rows = self.sheet_form_param_table.rowCount()
+                        self.sheet_form_param_table.setColumnCount(3)
+                        for r in range(total_rows - 1):
+                            self.sheet_form_param_table.setSpan(r, 1, 1, 2)
+                        last_row = total_rows - 1
+                        third_item = QTableWidgetItem("*δ")
+                        third_item.setFlags(third_item.flags() & ~Qt.ItemIsEditable)
+                        self.sheet_form_param_table.setItem(last_row, 2, third_item)
+                        note_label = QLabel(
+                            "注：x的默认取值为：\n1.当δ≤12mm时，x=1.0；\n2.当δ>12mm时，x=0.75；"
+                        )
+                        note_label.setWordWrap(True)
+                        note_label.setStyleSheet("color: #555555; font-size: 20px;")
+                        self.sheet_form_param_layout.addWidget(note_label)
+                finally:
+                    self._sheet_form_programmatic_update = False
 
                 # 点击图片后同步更新父窗口的sheet_form_param_layout
                 if self.parent:
                     self.parent.sheet_form_param_layout = self.get_current_tube_form_data()
             else:
-                self.sheet_form_param_layout.addWidget(QLabel("暂无参数"))
+                # 如果没有参数，显示空表格
+                self.sheet_form_param_table.setRowCount(0)
         except Exception as e:
             print(f"处理图片点击时出错: {str(e)}")
-            import traceback
+            traceback.print_exc()
+
+    def _handle_image_double_click(self, event, index):
+        """双击图片时，打开大图预览弹窗"""
+        try:
+            if index < 0 or index >= len(self.sheet_form_image_labels):
+                return
+
+            # 先保持原有选择逻辑
+            self._handle_image_click(event, index)
+
+            # 根据当前索引获取图片路径
+            if index >= len(self.sheet_form_current_images):
+                return
+
+            image_path = self.sheet_form_current_images[index]
+            if not image_path or not os.path.exists(image_path):
+                return
+
+            dlg = ImagePreviewDialog(image_path, self)
+            dlg.exec_()
+
+        except Exception as e:
+            print(f"处理图片双击时出错: {str(e)}")
             traceback.print_exc()
 
     def _clear_param_layout(self):
-        # 方法内容保持不变
-        if not hasattr(self, 'sheet_form_param_layout') or self.sheet_form_param_layout is None:
-            return
-
-        while self.sheet_form_param_layout.count():
-            item = self.sheet_form_param_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-            elif item.layout():
-                self._clear_sub_layout(item.layout())
+        # 清空布局中的所有控件，但保留表格
+        if hasattr(self, 'sheet_form_param_layout') and self.sheet_form_param_layout:
+            # 临时存储表格引用
+            table_widget = self.sheet_form_param_table
+            
+            # 清空布局中的所有控件
+            while self.sheet_form_param_layout.count():
+                item = self.sheet_form_param_layout.takeAt(0)
+                if item.widget() and item.widget() != table_widget:
+                    item.widget().deleteLater()
+                elif item.layout():
+                    self._clear_sub_layout(item.layout())
+            
+            # 重新添加表格
+            self.sheet_form_param_layout.addWidget(table_widget)
+            
+            # 清空表格内容
+            if hasattr(self, 'sheet_form_param_table') and self.sheet_form_param_table is not None:
+                self.sheet_form_param_table.setRowCount(0)
 
     def _clear_sub_layout(self, layout):
         # 方法内容保持不变
@@ -424,13 +1132,15 @@ class SheetFormPage(QWidget):
             elif sub_item.layout():
                 self._clear_sub_layout(sub_item.layout())
 
+    # -----------------------------------------------------------------
+    # ✅ 解决方案：修改 update 方法以使用 ImageLabel
+    # -----------------------------------------------------------------
     def sheet_form_updates_image_path(self, index):
-        # 方法内容保持不变
+        print(f"[DEBUG] 调用 sheet_form_updates_image_path, index={index}")
         try:
             if index < 0:
                 return
 
-            # 获取对应的文件夹名称
             connection_type_images = ['a', 'b', 'c', 'd', 'e', 'f']
             if index >= len(connection_type_images):
                 return
@@ -441,51 +1151,110 @@ class SheetFormPage(QWidget):
             image_base_path = os.path.join(script_dir, "static", "管板与壳体、管箱的连接")
             folder_path = os.path.join(image_base_path, selected_folder)
 
-            # 检查文件夹是否存在
             if not os.path.exists(folder_path):
                 for label in self.sheet_form_image_labels:
                     label.clear()
-                    label.setText("无可用图片")
+                    label.setText("无可用图片")  # 使用 ImageLabel.setText
                 return
 
-            # 清空之前的图片和记录
+            # 清空旧图片
             for label in self.sheet_form_image_labels:
-                label.clear()
+                label.clear()  # 调用 ImageLabel.clear()
                 label.setProperty("selected", False)
-                label.setStyleSheet(label.styleSheet())
+                label.setStyleSheet(label.styleSheet())  # 重新应用样式
 
-            self.sheet_form_current_images = []  # 清空当前图片记录
+            self.sheet_form_current_images = []
 
-            # 获取文件夹中的所有图片文件并按名称排序
             image_extensions = ['.png', '.jpg', '.jpeg', '.bmp']
             try:
-                image_files = sorted([f for f in os.listdir(folder_path)
-                                      if os.path.isfile(os.path.join(folder_path, f))
-                                      and os.path.splitext(f)[1].lower() in image_extensions])
+                image_files = sorted([
+                    f for f in os.listdir(folder_path)
+                    if os.path.isfile(os.path.join(folder_path, f))
+                    and os.path.splitext(f)[1].lower() in image_extensions
+                ])
             except Exception as e:
                 print(f"读取图片文件时出错: {str(e)}")
                 image_files = []
 
-            # 显示文件夹中的图片
-            for i, image_file in enumerate(image_files[:6]):
-                if i >= len(self.sheet_form_image_labels):
-                    break
+            # 左上角标注文本
+            b_overlay_texts = [
+                "a)𝑝 ≤ 4MPa",
+                "b)",
+                "c)𝑝 < 6.4MPa",
+                "d)𝑝 ≥ 6.4MPa",
+                "e)𝑝 ≥ 6.4MPa",
+                "h)𝑝 ≤ 4MPa"
+            ]
 
+            ef_overlay_texts = [
+                "a)δ ≤ 12mm, Ps ≤ 1MPa",
+                "b)1MPa < Ps ≤ 4MPa, δ ≤ 12, k = δ\n\t\t\t\t\tδ > 12, k = 0.7δ",
+                "c)1MPa < Ps ≤ 4MPa, δ ≤ 12, k = δ\n\t\t\t\t\tδ > 12, k = 0.7δ",
+                "d)Ps > 4MPa",
+                "e)Ps > 4MPa",
+                "f)Ps ≥ 4MPa",
+                "g)Ps ≥ 4MPa"
+            ]
+
+            # 如果图片数量超过现有标签数量，动态创建更多标签
+            while len(self.sheet_form_image_labels) < len(image_files):
+                i = len(self.sheet_form_image_labels)
+                # 创建新的图片标签
+                lbl = ImageLabel()
+                lbl.setMinimumSize(280, 250)
+                lbl.setStyleSheet("""
+                    ImageLabel {
+                        border: 2px solid #ddd;
+                        border-radius: 6px;
+                        background-color: white;
+                    }
+                    ImageLabel:hover {
+                        border: 2px solid #4CAF50;
+                    }
+                    ImageLabel[selected=true] {
+                        border: 3px solid #2196F3;
+                    }
+                    ImageLabel[selected=true][special_b_b=true] {
+                        border: 3px solid #888888;
+                    }
+                """)
+                lbl.setProperty("selected", False)
+                lbl.setProperty("special_b_b", False)
+                lbl.setProperty("index", i)
+                lbl.mousePressEvent = lambda event, idx=i: self._handle_image_click(event, idx)
+                
+                self.sheet_form_image_labels.append(lbl)
+                # 添加到网格布局
+                self.image_layout.addWidget(lbl, i // 3, i % 3)
+
+            for i, image_file in enumerate(image_files):
+                lbl = self.sheet_form_image_labels[i]
                 image_path = os.path.join(folder_path, image_file)
-                self.sheet_form_current_images.append(image_path)  # 记录当前图片路径
+                self.sheet_form_current_images.append(image_path)
 
                 pixmap = QPixmap(image_path)
-                if not pixmap.isNull():
-                    # 计算合适的缩放大小
-                    label_size = self.sheet_form_image_labels[i].size()
-                    scaled_pixmap = pixmap.scaled(
-                        label_size.width() - 10, label_size.height() - 10,
-                        Qt.KeepAspectRatio,
-                        Qt.SmoothTransformation
-                    )
-                    self.sheet_form_image_labels[i].setPixmap(scaled_pixmap)
-                else:
-                    self.sheet_form_image_labels[i].setText("图片加载失败")
+                if pixmap.isNull():
+                    lbl.setText("图片加载失败")
+                    continue
+
+                # ✅ 根据分类选择对应文字
+                text_to_draw = ""
+                if selected_folder == 'b' and i < len(b_overlay_texts):
+                    text_to_draw = b_overlay_texts[i]
+                elif selected_folder in ['e', 'f'] and i < len(ef_overlay_texts):
+                    text_to_draw = ef_overlay_texts[i]
+
+                # ✅ 将原始 pixmap 和文字交给 ImageLabel
+                lbl.setPixmap(pixmap)
+                lbl.setText(text_to_draw)
+
+            # 隐藏多余的标签（如果图片数量少于标签数量）
+            for i in range(len(image_files), len(self.sheet_form_image_labels)):
+                self.sheet_form_image_labels[i].hide()
+
+            # 显示需要的标签
+            for i in range(len(image_files)):
+                self.sheet_form_image_labels[i].show()
 
             # 清空右侧参数区域
             self._clear_param_layout()
@@ -495,19 +1264,21 @@ class SheetFormPage(QWidget):
             import traceback
             traceback.print_exc()
 
+        print(f"[DEBUG] 加载完成, 共加载 {len(self.sheet_form_current_images)} 张图片")
+
+
+
+
     def _safe_call(self, func):
         # 方法内容保持不变
         try:
             func()
         except Exception as e:
             print(f"调用函数时出错: {str(e)}")
-            import traceback
             traceback.print_exc()
 
     def get_current_tube_form_data(self):
-        # 方法内容保持不变
-        tube_form_data = []  # 初始化数据列表
-
+        """获取当前管板形式参数，返回元组列表格式"""
         # 检查是否有选中的图片
         selected_index = next(
             (i for i, lbl in enumerate(self.sheet_form_image_labels) if lbl.property("selected")),
@@ -516,7 +1287,7 @@ class SheetFormPage(QWidget):
 
         if selected_index is None:
             print("未选择任何管板图片")
-            return tube_form_data  # 返回空列表但至少保证列表存在
+            return []  # 返回空列表
 
         # 获取当前选中的图片信息
         try:
@@ -538,57 +1309,167 @@ class SheetFormPage(QWidget):
             image_files = [f for f in os.listdir(folder_path)
                            if os.path.isfile(os.path.join(folder_path, f))
                            and os.path.splitext(f)[1].lower() in image_extensions]
+            
+            # 对 image_files 排序以确保 selected_index 匹配
+            image_files.sort() 
 
             if selected_index >= len(image_files):
-                raise IndexError("选中的图片索引超出范围")
+                raise IndexError(f"选中的图片索引 {selected_index} 超出范围 {len(image_files)}")
 
             # 提取管板类型
             clicked_image = image_files[selected_index]
             plate_type = os.path.splitext(clicked_image)[0]
-            plate_type = f"{plate_type}型管板"
+            plate_type = f"{plate_type}"
 
         except Exception as e:
             print(f"获取管板类型时出错: {str(e)}")
             plate_type = "未知类型"
 
-        # 提取参数布局中的所有参数
-        if not hasattr(self, 'sheet_form_param_layout') or self.sheet_form_param_layout is None:
-            print("参数布局未初始化")
-            return tube_form_data
+        # 从表格中提取参数数据，返回元组列表格式
+        if not hasattr(self, 'sheet_form_param_table') or self.sheet_form_param_table is None:
+            print("参数表格未初始化")
+            return []
 
-        # 遍历布局中的所有参数项
-        param_count = 0  # 用于统计有效参数数量
-        for i in range(self.sheet_form_param_layout.count()):
-            item = self.sheet_form_param_layout.itemAt(i)
+        # 构建完整参数列表：管板类型 + 具体参数
+        full_params = []
 
-            # 检查是否是水平布局（参数名+输入框）
-            if item and isinstance(item.layout(), QHBoxLayout):
-                h_layout = item.layout()
-                if h_layout.count() >= 2:  # 确保有足够的控件
-                    # 获取参数名标签
-                    label_item = h_layout.itemAt(0)
-                    # 获取参数值输入框
-                    input_item = h_layout.itemAt(1)
+        # 添加管板类型参数
+        if plate_type:
+            full_params.append(("管板类型", plate_type))
 
-                    if label_item and input_item:
-                        label_widget = label_item.widget()
-                        input_widget = input_item.widget()
+        # 从表格中提取具体参数
+        for row in range(self.sheet_form_param_table.rowCount()):
+            # 获取参数名（第0列）
+            name_item = self.sheet_form_param_table.item(row, 0)
+            # 获取参数值（第1列）
+            value_item = self.sheet_form_param_table.item(row, 1)
+            value_widget = self.sheet_form_param_table.cellWidget(row, 1)
+            
+            if name_item and (value_item or value_widget):
+                param_name = name_item.text().strip()
+                raw_value = value_item.text().strip() if value_item else ""
 
-                        if isinstance(label_widget, QLabel) and isinstance(input_widget, QLineEdit):
-                            # 提取参数名（去除末尾的冒号）
-                            param_name = label_widget.text().rstrip(':').strip()
-                            # 提取参数值
-                            param_value = input_widget.text().strip()
+                # e_g / f_g 管板的参数 c：从单元格内的两个 QLineEdit 读取数字，拆成 c1 / c2 存储
+                if plate_type in ("e_g", "f_g") and param_name == "c" and value_widget:
+                    from PyQt5.QtWidgets import QLineEdit
 
-                            if param_name:
-                                data = {
-                                    "序号": str(param_count + 1),  # 添加序号
-                                    "管板类型": plate_type,
-                                    "参数符号": param_name,
-                                    "默认值": param_value,
+                    edits = value_widget.findChildren(QLineEdit)
+                    if len(edits) >= 2:
+                        left_num = edits[0].text().strip() or "1.5"
+                        right_num = edits[1].text().strip() or "25"
+                        # c 逻辑：保存为两条独立参数 c1 / c2
+                        if param_name:
+                            full_params.append(("c1", left_num))
+                            full_params.append(("c2", right_num))
+                        # 已经添加 c1/c2，这一行不再追加下面的通用 full_params.append
+                        continue
+                    else:
+                        # 控件异常时回退为默认 c1=1.5, c2=25
+                        if param_name:
+                            full_params.append(("c1", "1.5"))
+                            full_params.append(("c2", "25"))
+                        continue
+                else:
+                    param_value = raw_value
+                
+                if param_name:
+                    full_params.append((param_name, param_value))
 
-                                }
-                                tube_form_data.append(data)
-                                param_count += 1
+        print(f"🔍 [调试] 管板形式参数数量: {len(full_params)}")
+        return full_params
 
-        return tube_form_data
+    def get_DN_and_Di_from_parent(self):
+        # 从父界面的布管参数表中获取：公称直径 DN、壳体内直径 Dis、是否以外径为基准、布管限定圆 DL
+        try:
+            # 检查父窗口是否存在
+            if not self.parent:
+                print("错误：父窗口不存在")
+                return False
+            
+            # 检查父窗口是否有param_table属性
+            if not hasattr(self.parent, 'param_table'):
+                print("错误：父窗口没有param_table属性")
+                return False
+            
+            param_table = self.parent.param_table
+            
+            # 初始化变量
+            dn_value = None
+            di_value = None
+            outer_base_value = None  # "是否以外径为基准"
+            dl_value = None         # 布管限定圆 DL
+            
+            # 遍历参数表的所有行
+            for row in range(param_table.rowCount()):
+                # 跳过隐藏行
+                if param_table.isRowHidden(row):
+                    continue
+                
+                # 获取参数名（第1列）
+                param_name_item = param_table.item(row, 1)
+                if not param_name_item:
+                    continue
+                
+                param_name = param_name_item.text().strip()
+                
+                # 获取参数值（第2列）
+                # 需要检查是否是QComboBox
+                cell_widget = param_table.cellWidget(row, 2)
+                if isinstance(cell_widget, QComboBox):
+                    param_value = cell_widget.currentText()
+                else:
+                    value_item = param_table.item(row, 2)
+                    param_value = value_item.text() if value_item else ""
+                
+                # 匹配参数名并获取值
+                if param_name == "公称直径 DN":
+                    try:
+                        dn_value = float(param_value) if param_value else None
+                        print(f"获取到公称直径 DN: {dn_value}")
+                    except ValueError:
+                        print(f"警告：公称直径 DN 的值 '{param_value}' 无法转换为数字")
+                        dn_value = None
+                
+                elif param_name == "壳体内直径 Dis":
+                    try:
+                        di_value = float(param_value) if param_value else None
+                        print(f"获取到壳体内直径 Dis: {di_value}")
+                    except ValueError:
+                        print(f"警告：壳体内直径 Dis 的值 '{param_value}' 无法转换为数字")
+                        di_value = None
+
+                elif param_name == "是否以外径为基准":
+                    # 直接保存文本：“是”或“否”等
+                    outer_base_value = param_value.strip()
+                    print(f"获取到 是否以外径为基准: {outer_base_value}")
+
+                elif param_name == "布管限定圆 DL":
+                    try:
+                        dl_value = float(param_value) if param_value else None
+                        print(f"获取到 布管限定圆 DL: {dl_value}")
+                    except ValueError:
+                        print(f"警告：布管限定圆 DL 的值 '{param_value}' 无法转换为数字")
+                        dl_value = None
+            
+            # 将获取到的值赋给全局变量
+            self.DN = dn_value
+            self.Di = di_value
+            self.use_outer_diameter_base = outer_base_value
+            self.DL = dl_value
+            
+            # 检查是否成功获取到关键参数（DN、Di、DL 至少要有一个）
+            if self.DN is None and self.Di is None:
+                print("警告：未能从参数表中找到'公称直径 DN'和'壳体内直径 Dis'")
+                return False
+            if self.DL is None:
+                print("警告：未能从参数表中找到 '布管限定圆 DL'")
+            print(f"成功获取参数 - 公称直径 DN: {self.DN}, 壳体内直径 Dis: {self.Di}, 是否以外径为基准: {self.use_outer_diameter_base}, 布管限定圆 DL: {self.DL}")
+            return True
+                
+        except Exception as e:
+            print(f"获取参数时发生错误: {str(e)}")
+            traceback.print_exc()
+            return False
+
+#'''
+

@@ -1,7 +1,8 @@
-#10/19 3
+# 10/19 3
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QFrame,
-    QLineEdit, QGridLayout, QMessageBox, QScrollBar
+    QLineEdit, QGridLayout, QMessageBox, QScrollBar, QTableWidget,
+    QTableWidgetItem, QHeaderView, QDialog, QApplication
 )
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt, QSize
@@ -42,6 +43,71 @@ def create_product_connection():
         return None
 
 
+class NoWheelTableWidget(QTableWidget):
+    """自定义表格，禁用滚轮事件"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+    def wheelEvent(self, event):
+        pos = event.pos()
+        row = self.rowAt(pos.y())
+        column = self.columnAt(pos.x())
+
+        if 0 <= row < self.rowCount() and 0 <= column < self.columnCount():
+            cell_widget = self.cellWidget(row, column)
+            if cell_widget:
+                return
+
+        super().wheelEvent(event)
+
+
+class ImagePreviewDialog(QDialog):
+    """显示可缩放大图的弹窗，支持 Ctrl+滚轮缩放"""
+
+    def __init__(self, image_path, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("图片预览")
+        self.resize(800, 600)
+
+        self._scale_factor = 1.0
+        self._original_pixmap = QPixmap(image_path)
+
+        self._label = QLabel()
+        self._label.setAlignment(Qt.AlignCenter)
+
+        if not self._original_pixmap.isNull():
+            self._label.setPixmap(self._original_pixmap)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(self._label)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(scroll_area)
+
+    def wheelEvent(self, event):
+        # 按住 Ctrl 时，使用滚轮缩放图片；否则交给默认滚动处理
+        if QApplication.keyboardModifiers() & Qt.ControlModifier and not self._original_pixmap.isNull():
+            delta = event.angleDelta().y()
+            if delta > 0:
+                self._scale_factor *= 1.1
+            elif delta < 0:
+                self._scale_factor /= 1.1
+
+            # 限制缩放范围
+            self._scale_factor = max(0.1, min(self._scale_factor, 10.0))
+
+            scaled = self._original_pixmap.scaled(
+                self._original_pixmap.size() * self._scale_factor,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+            self._label.setPixmap(scaled)
+        else:
+            super().wheelEvent(event)
+
+
 class TubeSheetConnectionPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -59,6 +125,8 @@ class TubeSheetConnectionPage(QWidget):
         self.image_labels = []
         self.thumbnail_size = QSize(320, 220)
         self.setup_ui()
+        # 页面初始化后，尝试自动选中已保存的管板连接节点
+        self.auto_select_saved_connection()
 
     def get_product_id(self):
         try:
@@ -69,13 +137,135 @@ class TubeSheetConnectionPage(QWidget):
         except Exception:
             return None
 
+    def auto_select_saved_connection(self):
+        """根据产品ID自动选中已保存的管板连接方式和管板类型对应的图片"""
+        product_id = self.get_product_id()
+        if not product_id:
+            # 如果没有产品ID，直接选择第一张图片作为默认
+            if self.image_labels:
+                self.select_image(self.image_labels[0])
+            return
+
+        conn = create_product_connection()
+        if not conn:
+            # 如果无法连接产品库，同样选择第一张图片作为默认
+            if self.image_labels:
+                self.select_image(self.image_labels[0])
+            return
+
+        try:
+            with conn.cursor() as cur:
+                sql = """
+                SELECT 管板连接方式, 管板类型
+                FROM 产品设计活动表_管板连接表
+                WHERE 产品ID = %s
+                LIMIT 1
+                """
+                print(f"[调试] 自动选择已保存节点 - SQL: {sql}")
+                cur.execute(sql, (product_id,))
+                row = cur.fetchone()
+                if not row:
+                    print("[调试] 自动选择已保存节点 - 未找到该产品ID的记录")
+                    # 未找到任何记录，选中第一张图片作为默认
+                    if self.image_labels:
+                        self.select_image(self.image_labels[0])
+                    return
+
+                connection_type = row.get("管板连接方式") if isinstance(row, dict) else row[0]
+                tube_sheet_type = row.get("管板类型") if isinstance(row, dict) else row[1]
+                print(f"[调试] 自动选择已保存节点 - 连接方式: {connection_type}, 管板类型: {tube_sheet_type}")
+
+                if not connection_type or tube_sheet_type is None:
+                    # 记录不完整，同样退回选中第一张图片
+                    if self.image_labels:
+                        self.select_image(self.image_labels[0])
+                    return
+
+                target_label = None
+                for label in self.image_labels:
+                    if (getattr(label, 'connection_type', None) == connection_type and
+                            getattr(label, 'tube_sheet_type', None) == str(tube_sheet_type)):
+                        target_label = label
+                        break
+
+                if target_label is not None:
+                    # 复用现有的选择逻辑
+                    self.select_image(target_label)
+                else:
+                    print("[调试] 自动选择已保存节点 - 未在图片列表中找到匹配的标签")
+                    # 有记录但找不到对应图片时，也退回选中第一张图片
+                    if self.image_labels:
+                        self.select_image(self.image_labels[0])
+        except Exception as e:
+            print(f"[tube_sheet_connection] 自动选择已保存节点时发生错误: {str(e)}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            conn.close()
+
+    def _get_param_from_parent(self, param_name):
+        """从父窗口参数表读取指定参数的值"""
+        try:
+            # 检查父窗口是否存在
+            if not self.parent:
+                print(f"[tube_sheet_connection] 错误：父窗口不存在")
+                return None
+
+            # 检查父窗口是否有param_table属性
+            if not hasattr(self.parent, 'param_table'):
+                print(f"[tube_sheet_connection] 错误：父窗口没有param_table属性")
+                return None
+
+            param_table = self.parent.param_table
+
+            print(f"🔍 [调试] 在父窗口参数表中查找参数: '{param_name}'")
+            print(f"🔍 [调试] 父窗口参数表总行数: {param_table.rowCount()}")
+
+            # 遍历参数表的所有行
+            for row in range(param_table.rowCount()):
+                # 跳过隐藏行
+                if param_table.isRowHidden(row):
+                    continue
+
+                # 获取参数名（第1列）
+                param_name_item = param_table.item(row, 1)
+                if not param_name_item:
+                    continue
+
+                current_param_name = param_name_item.text().strip()
+
+                # 获取参数值（第2列）
+                # 需要检查是否是QComboBox
+                from PyQt5.QtWidgets import QComboBox
+                cell_widget = param_table.cellWidget(row, 2)
+                if isinstance(cell_widget, QComboBox):
+                    param_value = cell_widget.currentText()
+                else:
+                    value_item = param_table.item(row, 2)
+                    param_value = value_item.text() if value_item else ""
+
+                print(f"🔍 [调试] 父窗口参数表第{row}行: '{current_param_name}' = '{param_value}'")
+
+                # 匹配参数名并返回值
+                if current_param_name == param_name:
+                    print(f"✅ [调试] 从父窗口参数表找到 {param_name}: {param_value}")
+                    return param_value
+
+            print(f"❌ [调试] 在父窗口参数表中未找到参数: {param_name}")
+            return None
+
+        except Exception as e:
+            print(f"[tube_sheet_connection] 从父窗口读取参数时发生错误: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return None
+
     def setup_ui(self):
         """主布局"""
         outer_layout = QHBoxLayout(self)
         outer_layout.setContentsMargins(20, 20, 20, 20)
         outer_layout.setSpacing(30)
 
-        # ---------------- 左侧图片区 + 滚动条 ----------------
         left_outer = QVBoxLayout()
         left_outer.setSpacing(5)
         left_frame = QFrame()
@@ -110,7 +300,35 @@ class TubeSheetConnectionPage(QWidget):
             folder = self.current_dir.joinpath("static", conn_type)
             images = []
             if folder.exists() and folder.is_dir():
-                images = sorted([p for p in folder.iterdir() if p.is_file() and p.suffix.lower() == ".png"])
+                raw_images = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() == ".png"]
+
+                # 对同时包含“整体管板”和“复合管板”的连接方式，强制整体在左、复合在右
+                if conn_type in [
+                    "强度焊接加贴胀管孔结构",
+                    "机械胀接管孔结构",
+                    "机械强度胀接加密封焊管孔结构",
+                ]:
+                    def _tube_order(path_obj):
+                        stem = path_obj.stem
+                        # 先用与 infer_tube_sheet_type 相同的规则判断类型
+                        if "复合" in stem or "1" in stem:
+                            ts_type = "1"
+                        elif "整体" in stem or "0" in stem:
+                            ts_type = "0"
+                        else:
+                            ts_type = stem
+
+                        # 整体管板(0)排在前面，复合管板(1)排在后面，其它保持文件名字典序
+                        if ts_type == "0":
+                            return (0, stem)
+                        elif ts_type == "1":
+                            return (1, stem)
+                        else:
+                            return (2, stem)
+
+                    images = sorted(raw_images, key=_tube_order)
+                else:
+                    images = sorted(raw_images)
 
             for idx, img_path in enumerate(images):
                 lbl = QLabel()
@@ -133,8 +351,8 @@ class TubeSheetConnectionPage(QWidget):
                     pix = QPixmap(str(img_path))
                     if not pix.isNull():
                         scaled = pix.scaled(
-                            self.thumbnail_size.width()-10,
-                            self.thumbnail_size.height()-10,
+                            self.thumbnail_size.width() - 10,
+                            self.thumbnail_size.height() - 10,
                             Qt.KeepAspectRatio,
                             Qt.SmoothTransformation
                         )
@@ -147,6 +365,7 @@ class TubeSheetConnectionPage(QWidget):
                 lbl.connection_type = conn_type
                 lbl.setProperty("selected", False)
                 lbl.mousePressEvent = self._make_label_click_handler(lbl)
+                lbl.mouseDoubleClickEvent = self._make_label_double_click_handler(lbl)
                 self.image_labels.append(lbl)
                 grid_layout.addWidget(lbl, idx // 4, idx % 4)
 
@@ -162,9 +381,7 @@ class TubeSheetConnectionPage(QWidget):
         left_outer.addWidget(left_frame)
         left_outer.addWidget(self.left_hscroll)
 
-        outer_layout.addLayout(left_outer, 3)
-
-        # ---------------- 右侧参数区 + 滚动条 ----------------
+        outer_layout.addLayout(left_outer, 13)  # 左侧图片区：65% (13/20)
         right_outer = QVBoxLayout()
         right_outer.setSpacing(5)
         self.param_frame = QFrame()
@@ -178,42 +395,40 @@ class TubeSheetConnectionPage(QWidget):
         self.param_layout.setContentsMargins(15, 15, 15, 15)
         self.param_layout.setSpacing(15)
 
-        param_title = QLabel("参数设置")
-        param_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #333;")
-        param_title.setAlignment(Qt.AlignCenter)
-        self.param_layout.addWidget(param_title)
+        # 创建参数表格 - 完全照搬My_Piping.py的样式
+        self.param_table = NoWheelTableWidget()
+        self.param_table.setColumnCount(2)
+        # self.param_table.setHorizontalHeaderLabels(["参数名", "参数值"])  # 注释掉表头
+        self.param_table.verticalHeader().setVisible(False)
+        self.param_table.horizontalHeader().setVisible(False)  # 隐藏水平表头
 
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        separator.setStyleSheet("color: #ddd;")
-        self.param_layout.addWidget(separator)
+        # 设置列宽自适应策略 - 照搬My_Piping.py
+        self.param_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.param_table.horizontalHeader().setDefaultSectionSize(100)
+        self.param_table.horizontalHeader().setMinimumSectionSize(10)
 
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)  # ✅ 启用水平滚动
+        # 为各列设置不同的调整策略 - 照搬My_Piping.py
+        # 参数名列：可拉伸，占据较多空间
+        self.param_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        # 参数值列：交互式调整
+        self.param_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
 
-        self.scroll_content = QWidget()
-        self.scroll_param_layout = QVBoxLayout(self.scroll_content)
-        self.scroll_param_layout.setContentsMargins(10, 10, 10, 10)
-        self.scroll_param_layout.setSpacing(20)
+        # 设置初始列宽比例 - 照搬My_Piping.py
+        def set_initial_column_widths():
+            total_width = self.param_table.viewport().width()
+            if total_width > 0:
+                # 设置合理的初始比例：参数名60%，参数值40%
+                self.param_table.setColumnWidth(0, int(total_width * 0.6))  # 参数名
+                self.param_table.setColumnWidth(1, int(total_width * 0.4))  # 参数值
 
-        self.scroll_area.setWidget(self.scroll_content)
-        self.param_layout.addWidget(self.scroll_area)
+        # 在表格显示后设置初始列宽
+        self.param_table.showEvent = lambda event: set_initial_column_widths()
 
-        # ✅ 下方水平滚动条
-        self.right_hscroll = QScrollBar(Qt.Horizontal)
-        self.scroll_area.setHorizontalScrollBar(self.right_hscroll)
-        # ✅ 新增：右侧垂直滚动条
-        self.right_vscroll = QScrollBar(Qt.Vertical)
-        self.scroll_area.setVerticalScrollBar(self.right_vscroll)
-
+        self.param_layout.addWidget(self.param_table)
 
         right_outer.addWidget(self.param_frame)
-        right_outer.addWidget(self.right_hscroll)
 
-        outer_layout.addLayout(right_outer, 2)
+        outer_layout.addLayout(right_outer, 7)  # 右侧参数区：35% (7/20)
 
         # ✅ 统一滚动条样式（灰色风格）
         scrollbar_style = """
@@ -241,35 +456,49 @@ class TubeSheetConnectionPage(QWidget):
         """
         self.image_scroll.verticalScrollBar().setStyleSheet(scrollbar_style)
         self.image_scroll.horizontalScrollBar().setStyleSheet(scrollbar_style)
-        self.scroll_area.verticalScrollBar().setStyleSheet(scrollbar_style)
-        self.scroll_area.horizontalScrollBar().setStyleSheet(scrollbar_style)
         self.left_hscroll.setStyleSheet(scrollbar_style)
-        self.right_hscroll.setStyleSheet(scrollbar_style)
-        self.right_vscroll.setStyleSheet(scrollbar_style)
-
 
     def _make_label_click_handler(self, lbl):
         def handler(event):
             if event is None or event.button() == Qt.LeftButton:
                 self.select_image(lbl)
+
         return handler
+
+    def _make_label_double_click_handler(self, lbl):
+        def handler(event):
+            if event is None or event.button() == Qt.LeftButton:
+                # 双击时在进行参数选择的基础上，打开图片预览弹窗
+                self.select_image(lbl)
+                image_path = getattr(lbl, 'image_path', '')
+                if image_path:
+                    self.open_image_preview(image_path)
+
+        return handler
+
+    def open_image_preview(self, image_path):
+        """打开图片预览弹窗，显示可缩放大图"""
+        dlg = ImagePreviewDialog(image_path, self)
+        dlg.exec_()
 
     def infer_tube_sheet_type(self, filename):
         f = filename.lower()
-        if '复合' in f or '0' in f:
-            return '0'
-        elif '整体' in f or '1' in f:
-            return '1'
+        # print(f"[调试] 推断管板类型 - 文件名: {filename}")
+        if '复合' in f or '1' in f:
+            result = '1'
+        elif '整体' in f or '0' in f:
+            result = '0'
         elif 'a' in f:
-            return 'a'
+            result = 'a'
         elif 'b' in f:
-            return 'b'
+            result = 'b'
         elif 'c' in f:
-            return 'c'
+            result = 'c'
         elif 'd' in f:
-            return 'd'
+            result = 'd'
         else:
-            return filename
+            result = filename
+        return result
 
     def select_image(self, label):
         if not hasattr(label, 'connection_type') or not hasattr(label, 'tube_sheet_type'):
@@ -288,54 +517,107 @@ class TubeSheetConnectionPage(QWidget):
 
         conn_type = label.connection_type
         tube_type = label.tube_sheet_type
+        print(f"[调试] 点击图片 - 连接方式: {conn_type}, 管板类型: {tube_type}")
         params = self.get_parameters_by_type(conn_type, tube_type)
 
-        for param in params:
-            param_group = QHBoxLayout()
-            param_group.setSpacing(15)
-            param_group.setContentsMargins(0, 0, 0, 0)
+        # 设置表格行数
+        self.param_table.setRowCount(len(params))
 
-            name_label = QLabel(f"{param['name']}:")
-            name_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #333;")
-            name_label.setFixedWidth(220)
-            name_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        # 如果没有参数（如内孔焊接头形式），显示空白表格
+        if len(params) == 0:
+            # 清空表格内容但保持表格结构
+            self.param_table.clearContents()
+            # 断开之前的信号连接，避免重复连接
+            try:
+                self.param_table.itemChanged.disconnect()
+            except TypeError:
+                pass  # 如果没有连接则忽略
+            return
 
-            input_edit = QLineEdit(param['value'])
-            input_edit.setStyleSheet("""
-                QLineEdit {
-                    font-size: 16px;
-                    padding: 8px 12px;
-                    border: 2px solid #ccc;
-                    border-radius: 6px;
-                    background-color: white;
-                    min-height: 40px;
-                }
-                QLineEdit:focus {
-                    border: 2px solid #2196F3;
-                }
-            """)
-            input_edit.setFixedWidth(120)
-            input_edit.setFixedHeight(40)
-            input_edit.textChanged.connect(lambda text, name=param['name']: self.update_param_value(name, text))
+        # 设置列宽比例为6:4
+        header = self.param_table.horizontalHeader()
+        total_width = self.param_table.width()
+        if total_width > 0:
+            col0_width = int(total_width * 0.6)  # 参数名列占60%
+            col1_width = int(total_width * 0.4)  # 参数值列占40%
+            header.resizeSection(0, col0_width)
+            header.resizeSection(1, col1_width)
 
+        # 填充表格数据 - 完全照搬My_Piping.py的方式
+        for row, param in enumerate(params):
+            # 参数名列 - 只读
+            name_item = QTableWidgetItem(param['name'])
+            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)  # 参数名不可编辑
+            self.param_table.setItem(row, 0, name_item)
+
+            # 参数值列 - 可编辑，照搬My_Piping.py的设置
+            value_item = QTableWidgetItem(param['value'])
+            value_item.setFlags(Qt.ItemIsEditable | Qt.ItemIsEnabled)  # 照搬My_Piping.py的权限设置
+            self.param_table.setItem(row, 1, value_item)
+
+            # 存储参数信息
             self.current_params.append((param['name'], param['value']))
 
-            container = QWidget()
-            container.setFixedHeight(50)
-            container.setLayout(param_group)
-            param_group.addWidget(name_label)
-            param_group.addWidget(input_edit)
-            param_group.addStretch()
-            self.scroll_param_layout.addWidget(container)
+        # 连接表格数据变化信号
+        self.param_table.itemChanged.connect(self.on_table_item_changed)
 
-        self.scroll_area.verticalScrollBar().setValue(0)
+    def resizeEvent(self, event):
+        """处理窗口大小变化，重新设置列宽比例"""
+        super().resizeEvent(event)
+        if (hasattr(self, 'param_table') and
+                self.param_table is not None and
+                self.param_table.rowCount() > 0):
+            try:
+                header = self.param_table.horizontalHeader()
+                total_width = self.param_table.width()
+                if total_width > 0:
+                    col0_width = int(total_width * 0.6)  # 参数名列占60%
+                    col1_width = int(total_width * 0.4)  # 参数值列占40%
+                    header.resizeSection(0, col0_width)
+                    header.resizeSection(1, col1_width)
+            except RuntimeError:
+                # 表格已被删除，忽略错误
+                pass
 
     def clear_parameters(self):
-        for i in reversed(range(self.scroll_param_layout.count())):
-            w = self.scroll_param_layout.itemAt(i).widget()
-            if w:
-                w.deleteLater()
+        # 清空表格
+        self.param_table.setRowCount(0)
         self.current_params = []
+
+        # 清空布局中的其他控件（如警告标签），但保留表格
+        if hasattr(self, 'param_layout') and self.param_layout:
+            # 临时存储表格引用
+            table_widget = self.param_table
+
+            # 清空布局
+            while self.param_layout.count():
+                item = self.param_layout.takeAt(0)
+                if item.widget() and item.widget() != table_widget:
+                    item.widget().deleteLater()
+                elif item.layout():
+                    self._clear_sub_layout(item.layout())
+
+            # 重新添加表格
+            self.param_layout.addWidget(table_widget)
+
+    def _clear_sub_layout(self, layout):
+        """清空子布局"""
+        while layout.count():
+            sub_item = layout.takeAt(0)
+            if sub_item.widget():
+                sub_item.widget().deleteLater()
+            elif sub_item.layout():
+                self._clear_sub_layout(sub_item.layout())
+
+    def on_table_item_changed(self, item):
+        """处理表格数据变化"""
+        if item.column() == 1:  # 只处理参数值列的变化
+            row = item.row()
+            param_name_item = self.param_table.item(row, 0)
+            if param_name_item:
+                param_name = param_name_item.text()
+                param_value = item.text()
+                self.update_param_value(param_name, param_value)
 
     def update_param_value(self, param_name, param_value):
         for i, (n, v) in enumerate(self.current_params):
@@ -344,7 +626,99 @@ class TubeSheetConnectionPage(QWidget):
                 return
         self.current_params.append((param_name, param_value))
 
+    def get_current_parameters(self):
+        """获取当前参数列表，包含连接方式和管板类型"""
+        # 从当前选中的图片标签获取连接方式和管板类型
+        connection_type = ""
+        tube_sheet_type = ""
+
+        # 查找当前选中的图片标签
+        selected_label = None
+        for label in self.image_labels:
+            if label.property("selected"):
+                selected_label = label
+                break
+
+        if selected_label:
+            connection_type = getattr(selected_label, 'connection_type', '')
+            tube_sheet_type = getattr(selected_label, 'tube_sheet_type', '')
+            print(f"🔍 [调试] 从选中图片获取的连接方式: '{connection_type}'")
+            print(f"🔍 [调试] 从选中图片获取的管板类型: '{tube_sheet_type}'")
+        else:
+            print(f"❌ [调试] 没有选中的图片标签")
+
+        # 构建完整参数列表：连接方式 + 管板类型 + 具体参数
+        full_params = []
+
+        # 添加连接方式参数
+        if connection_type:
+            full_params.append(("换热管与管板连接方式", connection_type))
+
+        # 添加管板类型参数
+        if tube_sheet_type:
+            full_params.append(("管板类型", tube_sheet_type))
+
+        # 添加具体参数（去重）
+        seen_params = set()
+        for param in self.current_params:
+            param_name = param[0]
+            if param_name not in seen_params:
+                full_params.append(param)
+                seen_params.add(param_name)
+
+        print(f"🔍 [调试] 最终返回的参数数量: {len(full_params)}")
+        return full_params
+
     def get_parameters_by_type(self, connection_type, tube_sheet_type):
+        # 特殊处理：内孔焊接头形式 - 不显示任何参数
+        if connection_type == "内孔焊接头形式":
+            return []
+
+        # 特殊处理：强度焊接的焊缝形式 - 只显示焊脚高度 l 参数
+        if connection_type == "强度焊接的焊缝形式":
+            # 从数据库读取焊脚高度 l 参数
+            product_id = self.get_product_id()
+            if product_id:
+                prod_conn = create_product_connection()
+                if prod_conn:
+                    try:
+                        with prod_conn.cursor() as cur:
+                            sql = """
+                            SELECT 参数名, 参数值
+                            FROM 产品设计活动表_管板连接表
+                            WHERE 产品ID = %s AND 管板连接方式 = %s AND 管板类型 = %s AND 参数名 = '焊脚高度 l'
+                            """
+                            cur.execute(sql, (product_id, connection_type, tube_sheet_type))
+                            rows = cur.fetchall()
+                            if rows:
+                                return [{"name": "焊脚高度 l", "value": rows[0]["参数值"]}]
+                    except pymysql.Error as e:
+                        print(f"[产品库查询错误] {e}")
+                    finally:
+                        prod_conn.close()
+
+            # 如果产品库没有，从元件库读取
+            comp_conn = create_component_connection()
+            if comp_conn:
+                try:
+                    with comp_conn.cursor() as cur:
+                        sql = """
+                        SELECT 参数名, 参数值
+                        FROM 管板连接表
+                        WHERE 管板连接方式 = %s AND 管板类型 = %s AND 参数名 = '焊脚高度 l'
+                        """
+                        cur.execute(sql, (connection_type, tube_sheet_type))
+                        rows = cur.fetchall()
+                        if rows:
+                            return [{"name": "焊脚高度 l", "value": rows[0]["参数值"]}]
+                except pymysql.Error as e:
+                    print(f"[元件库查询错误] {e}")
+                finally:
+                    comp_conn.close()
+
+            # 如果都没有找到，返回空值
+            return [{"name": "焊脚高度 l", "value": ""}]
+
         product_id = self.get_product_id()
         if product_id:
             prod_conn = create_product_connection()
@@ -356,10 +730,34 @@ class TubeSheetConnectionPage(QWidget):
                         FROM 产品设计活动表_管板连接表
                         WHERE 产品ID = %s AND 管板连接方式 = %s AND 管板类型 = %s
                         """
+                        print(f"[调试] 查询产品设计活动库 - SQL: {sql}")
+                        print(
+                            f"[调试] 查询参数 - 产品ID: {product_id}, 连接方式: {connection_type}, 管板类型: {tube_sheet_type}")
                         cur.execute(sql, (product_id, connection_type, tube_sheet_type))
                         rows = cur.fetchall()
                         if rows:
-                            return [{"name": r["参数名"], "value": r["参数值"]} for r in rows]
+                            # 处理特殊参数：从父窗口参数表读取
+                            processed_params = []
+                            for r in rows:
+                                param_name = r["参数名"]
+                                param_value = r["参数值"]
+
+                                # 特殊处理：换热管壁厚 δt 和 换热管外径 d
+                                if param_name == "换热管壁厚 δt":
+                                    # 从父窗口参数表读取"换热管壁厚 δ"
+                                    parent_value = self._get_param_from_parent("换热管壁厚 δ")
+                                    if parent_value is not None:
+                                        param_value = parent_value
+                                        print(f"[tube_sheet_connection] 从父窗口读取换热管壁厚 δ: {param_value}")
+                                elif param_name == "换热管外径 d":
+                                    # 从父窗口参数表读取"换热管外径 do"
+                                    parent_value = self._get_param_from_parent("换热管外径 do")
+                                    if parent_value is not None:
+                                        param_value = parent_value
+                                        print(f"[tube_sheet_connection] 从父窗口读取换热管外径 do: {param_value}")
+
+                                processed_params.append({"name": param_name, "value": param_value})
+                            return processed_params
                 except pymysql.Error as e:
                     print(f"[产品库查询错误] {e}")
                 finally:
@@ -375,9 +773,33 @@ class TubeSheetConnectionPage(QWidget):
                 FROM 管板连接表
                 WHERE 管板连接方式 = %s AND 管板类型 = %s
                 """
+                print(f"[调试] 查询元件库 - SQL: {sql}")
+                print(f"[调试] 查询参数 - 连接方式: {connection_type}, 管板类型: {tube_sheet_type}")
                 cur.execute(sql, (connection_type, tube_sheet_type))
                 rows = cur.fetchall()
-                return [{"name": r["参数名"], "value": r["参数值"]} for r in rows]
+
+                # 处理特殊参数：从父窗口参数表读取
+                processed_params = []
+                for r in rows:
+                    param_name = r["参数名"]
+                    param_value = r["参数值"]
+
+                    # 特殊处理：换热管壁厚 δt 和 换热管外径 d
+                    if param_name == "换热管壁厚 δt":
+                        # 从父窗口参数表读取"换热管壁厚 δ"
+                        parent_value = self._get_param_from_parent("换热管壁厚 δ")
+                        if parent_value is not None:
+                            param_value = parent_value
+                            print(f"[tube_sheet_connection] 从父窗口读取换热管壁厚 δ: {param_value}")
+                    elif param_name == "换热管外径 d":
+                        # 从父窗口参数表读取"换热管外径 do"
+                        parent_value = self._get_param_from_parent("换热管外径 do")
+                        if parent_value is not None:
+                            param_value = parent_value
+                            print(f"[tube_sheet_connection] 从父窗口读取换热管外径 do: {param_value}")
+
+                    processed_params.append({"name": param_name, "value": param_value})
+                return processed_params
         except pymysql.Error as e:
             QMessageBox.critical(self, "数据库错误", f"查询失败: {e}")
             return []

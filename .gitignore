@@ -1,0 +1,42 @@
+# 缓存与编译文件
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE配置
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 压缩包&大文件
+*.zip
+*.rar
+*.7z
+*.tar
+*.tar.gz
+*.exe
+*.dll
+*.bin
+
+# 环境&依赖
+venv/
+env/
+node_modules/
+dist/
+build/
+*.egg-info/
+
+# 日志&临时数据
+*.log
+*.tmp
+*.cache
+
+# 超大文件（超过100MB，GitHub不允许）
+*.exe
+*.rar
+*.zip
+*.7z

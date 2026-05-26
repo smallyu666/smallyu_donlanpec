@@ -1,10 +1,27 @@
 # modules/condition_input/funcs/multi_conditions_dialog.py
 import os
 from PyQt5.QtCore import Qt, QEvent
+# 0522新修改
+from PyQt5.QtGui import QFont
 from PyQt5 import uic
-from PyQt5.QtWidgets import QDialog, QMessageBox, QTableWidgetItem
+from PyQt5.QtWidgets import (
+    QDialog,
+    QMessageBox,
+    QTableWidgetItem,
+    QAbstractItemView,
+    QPushButton,
+    QToolButton,
+    QSizePolicy,
+    QHeaderView,
+)
 from modules.condition_input.funcs.ctrl_helper import enable_full_undo
-from PyQt5.QtWidgets import QSizePolicy, QHeaderView
+# 0522新修改
+from modules.condition_input.funcs.funcs_cdt_input import (
+    apply_table_style,
+    highlight_entire_row,
+    set_table_corner_label,
+    sync_table_row_height,
+)
 
 # PARAM_UNITS = ["MPa", "℃", "MPa", "℃", "℃", "MPa"]  # 按参数名称顺序给单位
 
@@ -16,6 +33,10 @@ db_config_1 = {
     'database': '产品设计活动库'
 }
 class MultiConditionsDialog(QDialog):
+    # 0522新修改：多工况弹窗布局（表格与按钮间距、初始加宽）
+    _TABLE_BUTTON_GAP = 100
+    _EXTRA_OPEN_WIDTH = 100
+
     PARAM_NAMES = [
         "设计压力*",
         "设计温度（最高）*",
@@ -24,8 +45,82 @@ class MultiConditionsDialog(QDialog):
         "工作温度（出口）",
         "最高允许工作压力"
     ]
+    # 不再硬编码固定起点；改为按产品动态计算起点（见 _compute_multi_id_base）
 
-# 已改
+    # 0522新修改：仅表格与底部按钮区之间留固定间距
+    def _ensure_table_button_gap(self):
+        """表格与底部按钮之间固定 100px；下拉框-表格、确定-取消 保持默认紧凑间距。"""
+        from PyQt5.QtWidgets import QSpacerItem, QSizePolicy, QVBoxLayout, QHBoxLayout, QFrame
+
+        root = self.layout()
+        if root is None:
+            return
+        root.setSpacing(6)
+        inner = self.findChild(QVBoxLayout, "verticalLayout")
+        if inner is not None:
+            inner.setSpacing(6)
+        btn_row = self.findChild(QHBoxLayout, "horizontalLayout_2")
+        if btn_row is not None:
+            btn_row.setSpacing(6)
+
+        footer = self.findChild(QFrame, "frame_button_footer")
+        if footer is None:
+            footer = self._wrap_buttons_in_footer(btn_row)
+
+        gap_target = footer if footer is not None else (
+            btn_row.parentWidget() if btn_row is not None else None
+        )
+        if gap_target is None:
+            return
+        idx = root.indexOf(gap_target)
+        if idx > 0:
+            prev = root.itemAt(idx - 1)
+            if prev and prev.spacerItem():
+                if prev.spacerItem().sizeHint().height() >= self._TABLE_BUTTON_GAP - 5:
+                    return
+        if idx >= 0:
+            root.insertItem(
+                idx,
+                QSpacerItem(20, self._TABLE_BUTTON_GAP, QSizePolicy.Minimum, QSizePolicy.Fixed),
+            )
+
+    # 0522新修改：确定/取消按钮淡灰蓝底栏（兼容旧 ui）
+    def _wrap_buttons_in_footer(self, btn_row):
+        """旧版 ui 无底栏时，为确定/取消按钮补上淡灰蓝底色区域。"""
+        from PyQt5.QtWidgets import QFrame, QHBoxLayout
+
+        if btn_row is None:
+            return None
+        root = self.layout()
+        if root is None:
+            return None
+        idx = -1
+        for i in range(root.count()):
+            if root.itemAt(i).layout() is btn_row:
+                idx = i
+                break
+        if idx < 0:
+            return None
+
+        footer = QFrame(self)
+        footer.setObjectName("frame_button_footer")
+        footer.setFrameShape(QFrame.NoFrame)
+        footer.setStyleSheet(
+            "QFrame#frame_button_footer {"
+            " background-color: #f0f4f7;"
+            " border: none;"
+            " border-top: 1px solid #d0d8e5;"
+            "}"
+        )
+        footer_lay = QHBoxLayout(footer)
+        footer_lay.setSpacing(6)
+        footer_lay.setContentsMargins(12, 10, 12, 10)
+        while btn_row.count():
+            footer_lay.addItem(btn_row.takeAt(0))
+        root.removeItem(root.itemAt(idx))
+        root.insertWidget(idx, footer)
+        return footer
+
     def fill_table(self, gongkuang_no):
         data_map = self._data_cache.get(gongkuang_no, {})
         for r, pname in enumerate(self.PARAM_NAMES):
@@ -50,13 +145,20 @@ class MultiConditionsDialog(QDialog):
         self.product_id = product_id
         self.current_gongkuang = 1
         self._data_cache = {}
+        # 动态ID基准：避免与常规设计参数ID冲突，也避免影响已有高位工况ID
+        self._multi_id_base = None
+        self._multi_id_safe_threshold = 0
+        self._multi_id_legacy_high = False
 
         # 加载 UI
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        ui_path = os.path.join(os.path.dirname(base_dir), "mutigongkuang.ui")
+        ui_path = os.path.join(os.path.dirname(base_dir), "mutigongkuang_new.ui")
         if not os.path.exists(ui_path):
             ui_path = os.path.join(base_dir, "mutigongkuang.ui")
         uic.loadUi(ui_path, self)
+
+        # 0522新修改
+        self._ensure_table_button_gap()
 
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint | Qt.WindowMinMaxButtonsHint)
 
@@ -74,23 +176,47 @@ class MultiConditionsDialog(QDialog):
         self.tableWidget.setColumnCount(3)
         self.tableWidget.setHorizontalHeaderLabels(["参数单位","壳程数值", "管程数值"])
 
-        # 1107新修改
-        self.tableWidget.horizontalHeader().setStyleSheet("""
-            QHeaderView::section {
-                border-top: 0px;
-                border-left: 0px;
-                border-right: 1px solid #D3D3D3;
-                border-bottom: 1px solid #D3D3D3;
-                background-color: white;
-            }
-        """)
-
-        for r, name in enumerate(self.PARAM_NAMES):
-            self.tableWidget.setVerticalHeaderItem(r, QTableWidgetItem(name))
-
-        # ✅ 安装 undo + 校核代理
+        # 0522新修改
+        apply_table_style(self.tableWidget, keep_vertical_header=True)
         parent_viewer = self.parent()
-        if parent_viewer:
+        ref_table = getattr(parent_viewer, "tableWidget_design_data", None) if parent_viewer else None
+        if ref_table is not None:
+            self.tableWidget.setFont(ref_table.font())
+        set_table_corner_label(self.tableWidget, "参数名称")
+        font_metrics = self.tableWidget.fontMetrics()
+        self.tableWidget.horizontalHeader().setFixedHeight(font_metrics.height() + 12)
+        self.tableWidget.verticalHeader().setFixedWidth(font_metrics.width("设计温度（最高）*") + 24)
+        self.tableWidget.itemSelectionChanged.connect(
+            lambda: highlight_entire_row(self.tableWidget)
+        )
+
+        # 0522新修改
+        self.tableWidget.verticalHeader().setDefaultAlignment(Qt.AlignCenter)
+        normal_font = QFont(self.tableWidget.font())
+        normal_font.setBold(False)
+        for r, name in enumerate(self.PARAM_NAMES):
+            name_item = QTableWidgetItem(name)
+            name_item.setFont(normal_font)
+            name_item.setTextAlignment(Qt.AlignCenter)
+            self.tableWidget.setVerticalHeaderItem(r, name_item)
+            for c in range(self.tableWidget.columnCount()):
+                cell = self.tableWidget.item(r, c)
+                if cell:
+                    cell.setFont(normal_font)
+
+        # 0522新修改：行高与条件输入设计数据表一致
+        sync_table_row_height(self.tableWidget, ref_table)
+
+        # ✅ 安装 undo + 校核代理（本地文件未恢复只读时不安装，避免代理下拉仍可编辑）
+        try:
+            import modules.chanpinguanli.bianl as bianl
+            self._readonly_local_files = bool(
+                getattr(bianl, "product_local_files_missing_readonly", False)
+            )
+        except Exception:
+            self._readonly_local_files = False
+
+        if parent_viewer and not self._readonly_local_files:
             try:
                 enable_full_undo(self.tableWidget, parent_viewer, mode="design")
             except Exception as e:
@@ -103,42 +229,227 @@ class MultiConditionsDialog(QDialog):
             self.btnok.clicked.connect(self.save_current_gongkuang)
         else:
             print("[多工况] 警告：UI 中找不到 btnok 按钮")
+        # 0522新修改
+        if hasattr(self, "btncanl"):
+            self.btncanl.clicked.connect(self.reject)
 
         # 默认加载工况1数据
         self.load_gongkuang_data(1)
         self.fill_table(1)
 
-        # ✅ 根据表格内容动态设置初始大小（高度正好能显示所有行）
-        vh = self.tableWidget.verticalHeader()
-        total_height = vh.length()  # 所有行高度之和
-        header_height = self.tableWidget.horizontalHeader().height()
-        frame = self.tableWidget.frameWidth() * 2
-        margin = 100  # 预留额外空间给下拉框、按钮
+        if self._readonly_local_files:
+            self._apply_readonly_for_missing_local_files()
 
-        total_height = total_height + header_height + frame + margin
-
-        # 表格宽度
-        total_width = sum(self.tableWidget.columnWidth(c) for c in range(self.tableWidget.columnCount()))
-        total_width += self.tableWidget.verticalHeader().width() + frame + 50  # 适当留点余量
-
-        self.resize(total_width, total_height)
-
-        # ✅ 允许用户继续拖动缩放
-        self.setSizeGripEnabled(True)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
-        # ✅ 表格自适应窗口
+        # 0522新修改：打开时按内容撑开窗口，放大后列宽仍自适应
         self.tableWidget.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.tableWidget.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.tableWidget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setSizeGripEnabled(True)
+        self._fit_dialog_size()
+        set_table_corner_label(self.tableWidget, "参数名称")
 
+    # 0522新修改：多工况弹窗初始尺寸（全部参数可见、保留放大自适应）
+    def _fit_dialog_size(self):
+        """打开时按行高/列宽撑开，使全部参数可见；不锁定最大尺寸，保留放大后自适应。"""
+        parent_viewer = self.parent()
+        ref_table = getattr(parent_viewer, "tableWidget_design_data", None) if parent_viewer else None
+        sync_table_row_height(self.tableWidget, ref_table)
 
+        hh = self.tableWidget.horizontalHeader()
+        vh = self.tableWidget.verticalHeader()
+        frame = self.tableWidget.frameWidth() * 2
+        cols = self.tableWidget.columnCount()
+        rows = self.tableWidget.rowCount()
+
+        table_h = sum(self.tableWidget.rowHeight(r) for r in range(rows))
+        table_h += hh.height() + frame
+
+        # 先按内容量宽度，再恢复 Stretch 以便放大窗口时列仍自适应
+        for c in range(cols):
+            hh.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        self.tableWidget.resizeColumnsToContents()
+        table_w = vh.width() + sum(self.tableWidget.columnWidth(c) for c in range(cols)) + frame + 8
+        for c in range(cols):
+            hh.setSectionResizeMode(c, QHeaderView.Stretch)
+
+        self.tableWidget.setMinimumHeight(table_h)
+        self.tableWidget.setMinimumWidth(table_w)
+        self.tableWidget.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.tableWidget.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        lay = self.layout()
+        if lay is not None:
+            lay.activate()
+            hint = lay.sizeHint()
+            self.resize(hint.width() + self._EXTRA_OPEN_WIDTH, hint.height())
+        else:
+            extra_h = 120
+            if hasattr(self, "combo_gongkuang"):
+                extra_h += self.combo_gongkuang.sizeHint().height() + 12
+            self.resize(table_w + 24 + self._EXTRA_OPEN_WIDTH, table_h + extra_h)
+
+    # 0522新修改
+    def showEvent(self, event):
+        super().showEvent(event)
+        set_table_corner_label(self.tableWidget, "参数名称")
+        self._fit_dialog_size()
+
+    def _apply_table_readonly_only(self):
+        """仅锁定表格与单元格内嵌控件（切换工况重新 fill 后需再调用）。"""
+        self.tableWidget.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        for r in range(self.tableWidget.rowCount()):
+            for c in range(self.tableWidget.columnCount()):
+                it = self.tableWidget.item(r, c)
+                if it:
+                    it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+                cw = self.tableWidget.cellWidget(r, c)
+                if cw is not None:
+                    cw.setEnabled(False)
+
+    def _apply_readonly_for_missing_local_files(self):
+        """产品本地文件夹未恢复时：禁止编辑表格与保存按钮；工况下拉可切换以浏览各工况数据。"""
+        try:
+            self._apply_table_readonly_only()
+            for btn in self.findChildren(QPushButton):
+                btn.setEnabled(False)
+            for btn in self.findChildren(QToolButton):
+                btn.setEnabled(False)
+        except Exception as e:
+            print(f"[多工况] 只读应用失败: {e}")
 
     def _make_param_field(self, param_name, gongkuang_no):
         if gongkuang_no == 1:
             return param_name
         else:
             return f"{param_name}[工况{gongkuang_no}]"
+
+    def _get_param_unit_for_multi(self, row_index, param_name):
+        """优先使用多工况弹窗表格第0列单位，缺失时回退主界面设计数据表单位。"""
+        try:
+            unit_item = self.tableWidget.item(row_index, 0)
+            if unit_item and unit_item.text() and unit_item.text().strip():
+                return unit_item.text().strip()
+        except Exception:
+            pass
+
+        # 回退：从主界面设计数据表读取单位
+        parent = self.parent()
+        if not parent or not hasattr(parent, "tableWidget_design_data"):
+            return ""
+        table = parent.tableWidget_design_data
+        for row in range(table.rowCount()):
+            name_item = table.item(row, 1)
+            if name_item and name_item.text().strip() == param_name:
+                unit_item = table.item(row, 2)
+                return unit_item.text().strip() if unit_item and unit_item.text() else ""
+        return ""
+
+    def _compute_multi_id_base(self):
+        """
+        计算多工况参数ID的动态起点（不硬编码900000）：
+        - normal_max：当前产品常规参数（不含[工况]）最大ID
+        - template_max：模板表（按产品型式过滤）最大ID
+        - multi_max：当前产品已有多工况参数最大ID（若历史已写入高位，则沿用高位区间，避免回迁）
+        “整齐化”策略：
+        - 对新产品/低位多工况：固定以 safe_threshold 作为基准（即 max(normal_max, template_max)），
+          从而保证工况2/3的ID区间稳定、连续，不会因导入了部分参数导致后续 base 被 multi_max 抬高。
+        - 对历史已存在明显高位工况ID（例如 900xxx 或远高于常规区间）：视为 legacy_high，
+          为避免扰动历史数据，继续沿用原先“跟随 multi_max”策略。
+        返回 (base, safe_threshold, legacy_high)。
+        同时返回 safe_threshold=max(normal_max, template_max)，用于判断是否需要把“落在常规区间”的历史工况ID迁移走。
+        """
+        normal_max = 0
+        template_max = 0
+        multi_max = 0
+        try:
+            from modules.condition_input.funcs.funcs_cdt_input import get_connection
+            from main import get_product_form_from_db
+            product_form = get_product_form_from_db(self.product_id) or "all"
+
+            conn = get_connection(**db_config_1)
+            try:
+                with conn.cursor() as cur:
+                    # 常规参数最大ID（排除[工况]）
+                    cur.execute(
+                        """
+                        SELECT MAX(设计数据参数ID) AS max_id
+                        FROM 产品设计活动表_设计数据表
+                        WHERE 产品ID=%s
+                          AND (参数名称 IS NULL OR 参数名称 NOT LIKE %s)
+                        """,
+                        (self.product_id, "%[工况%")
+                    )
+                    r = cur.fetchone() or {}
+                    normal_max = int(r.get("max_id") or 0)
+
+                    # 现有多工况最大ID（若历史已高位，沿用）
+                    cur.execute(
+                        """
+                        SELECT MAX(设计数据参数ID) AS max_id
+                        FROM 产品设计活动表_设计数据表
+                        WHERE 产品ID=%s AND 参数名称 LIKE %s
+                        """,
+                        (self.product_id, "%[工况%")
+                    )
+                    r2 = cur.fetchone() or {}
+                    multi_max = int(r2.get("max_id") or 0)
+
+                    # 模板最大ID（按产品型式：NEN/AEM/BEM 额外包含 'NEN,AEM,BEM' 行；其余仅'all'）
+                    if product_form in ("NEN", "AEM", "BEM","NEN(Head)"):
+                        cur.execute(
+                            """
+                            SELECT MAX(设计数据参数ID) AS max_id
+                            FROM 产品条件库.设计数据模板表
+                            WHERE 所属型式 = %s OR 所属型式 LIKE %s
+                            """,
+                            ("all", f"%{product_form}%")
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            SELECT MAX(设计数据参数ID) AS max_id
+                            FROM 产品条件库.设计数据模板表
+                            WHERE 所属型式 = %s
+                            """,
+                            ("all",)
+                        )
+                    r3 = cur.fetchone() or {}
+                    template_max = int(r3.get("max_id") or 0)
+            finally:
+                conn.close()
+        except Exception as e:
+            print(f"[多工况] 计算动态ID起点失败: {e}")
+
+        safe_threshold = max(normal_max, template_max)
+        # 判断是否存在“明显高位”的历史工况ID：这类产品不做整齐化回迁，避免影响既有数据
+        legacy_high = False
+        try:
+            # 900xxx 是你们历史方案的典型区间；或 multi_max 远超 safe_threshold 也视为高位
+            if int(multi_max or 0) >= 900000:
+                legacy_high = True
+            elif int(multi_max or 0) > int(safe_threshold or 0) + (len(self.PARAM_NAMES) * 2) + 50:
+                legacy_high = True
+        except Exception:
+            legacy_high = False
+
+        # 整齐化：新产品/低位工况固定基准为 safe_threshold；高位历史产品沿用 multi_max
+        base = int(safe_threshold or 0) if not legacy_high else max(int(safe_threshold or 0), int(multi_max or 0))
+        return base, safe_threshold, legacy_high
+
+    def _get_multi_condition_param_id(self, gongkuang_no, param_name):
+        """
+        生成不与常规设计参数冲突的“动态”参数ID（不再硬编码900000）。
+        规则：base + (工况号-2)*len(PARAM_NAMES) + 参数序号（1-based）
+        """
+        if self._multi_id_base is None:
+            self._multi_id_base, self._multi_id_safe_threshold, self._multi_id_legacy_high = self._compute_multi_id_base()
+        try:
+            param_index = self.PARAM_NAMES.index(param_name) + 1
+        except ValueError:
+            param_index = 99
+        # base是当前最大ID；为确保新ID>base，需要再顺延
+        offset = (gongkuang_no - 2) * len(self.PARAM_NAMES) + param_index
+        return int(self._multi_id_base or 0) + offset
 
     def eventFilter(self, obj, event):
         # 屏蔽工况下拉框的滚轮，避免误切换
@@ -209,6 +520,8 @@ class MultiConditionsDialog(QDialog):
 
 
     def save_current_gongkuang(self):
+        if getattr(self, "_readonly_local_files", False):
+            return
         gongkuang_no = self.current_gongkuang
         self._save_to_cache(gongkuang_no)
         if gongkuang_no == 1:
@@ -238,17 +551,11 @@ class MultiConditionsDialog(QDialog):
             from modules.condition_input.funcs.funcs_cdt_input import get_connection
             conn = get_connection(**db_config_1)
             with conn.cursor() as cur:
-                # 获取当前最大序号
-                cur.execute("""
-                    SELECT MAX(设计数据参数ID) AS max_sn
-                    FROM 产品设计活动表_设计数据表
-                    WHERE 产品ID=%s
-                """, (self.product_id,))
-                row = cur.fetchone()
-                max_sn = row["max_sn"] or 31
-                for pname in self.PARAM_NAMES:
+                for row_idx, pname in enumerate(self.PARAM_NAMES):
                     kc_val, gc_val = self._data_cache[gongkuang_no][pname]
                     db_field = self._make_param_field(pname, gongkuang_no)
+                    reserved_param_id = self._get_multi_condition_param_id(gongkuang_no, pname)
+                    param_unit = self._get_param_unit_for_multi(row_idx, pname)
 
                     # 查询是否已存在
                     cur.execute("""
@@ -259,20 +566,35 @@ class MultiConditionsDialog(QDialog):
                     exists = row is not None
 
                     if exists:
-                        # 已存在 → 更新
+                        # 已存在 → 更新；若历史ID为低位冲突段，先迁移到保留高位ID
+                        existing_param_id = row.get("设计数据参数ID")
+                        # 只在“落在常规区间”时迁移，避免把已经是高位的历史工况ID回迁/扰动
+                        if (
+                            not getattr(self, "_multi_id_legacy_high", False)
+                            and existing_param_id != reserved_param_id
+                            and int(existing_param_id or 0) <= int(self._multi_id_safe_threshold or 0) + (len(self.PARAM_NAMES) * 2) + 50
+                        ):
+                            try:
+                                cur.execute("""
+                                    UPDATE 产品设计活动表_设计数据表
+                                    SET 设计数据参数ID=%s
+                                    WHERE 产品ID=%s AND 参数名称=%s
+                                """, (reserved_param_id, self.product_id, db_field))
+                            except Exception as migrate_err:
+                                # 若高位ID已被占用，保底按参数名称更新数值，避免流程中断
+                                print(f"[多工况] 参数ID迁移失败({db_field}): {migrate_err}")
                         cur.execute("""
                             UPDATE 产品设计活动表_设计数据表
-                            SET 壳程数值=%s, 管程数值=%s
+                            SET 参数单位=%s, 壳程数值=%s, 管程数值=%s
                             WHERE 产品ID=%s AND 参数名称=%s
-                        """, (kc_val, gc_val, self.product_id, db_field))
+                        """, (param_unit, kc_val, gc_val, self.product_id, db_field))
                     else:
-                        # 不存在 → 插入，每个参数单独递增序号
-                        max_sn += 1
+                        # 不存在 → 插入，使用高位保留ID，避免与主界面常规参数ID冲突
                         cur.execute("""
                             INSERT INTO 产品设计活动表_设计数据表
-                                (设计数据参数ID, 产品ID, 参数名称, 壳程数值, 管程数值)
-                            VALUES (%s, %s, %s, %s, %s)
-                        """, (max_sn, self.product_id, db_field, kc_val, gc_val))
+                                (设计数据参数ID, 产品ID, 参数名称, 参数单位, 壳程数值, 管程数值)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        """, (reserved_param_id, self.product_id, db_field, param_unit, kc_val, gc_val))
 
             conn.commit()
             conn.close()
@@ -289,6 +611,8 @@ class MultiConditionsDialog(QDialog):
 
     def _auto_save_current_gongkuang(self, gongkuang_no):
         """静默保存当前工况（无弹窗）"""
+        if getattr(self, "_readonly_local_files", False):
+            return
         self._save_to_cache(gongkuang_no)
 
         if gongkuang_no == 1:
@@ -315,36 +639,45 @@ class MultiConditionsDialog(QDialog):
             from modules.condition_input.funcs.funcs_cdt_input import get_connection
             conn = get_connection(**db_config_1)
             with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT MAX(设计数据参数ID) AS max_sn
-                    FROM 产品设计活动表_设计数据表
-                    WHERE 产品ID=%s
-                """, (self.product_id,))
-                row = cur.fetchone()
-                max_sn = row["max_sn"] or 31
-                for pname in self.PARAM_NAMES:
+                for row_idx, pname in enumerate(self.PARAM_NAMES):
                     kc_val, gc_val = self._data_cache[gongkuang_no][pname]
                     db_field = self._make_param_field(pname, gongkuang_no)
+                    reserved_param_id = self._get_multi_condition_param_id(gongkuang_no, pname)
+                    param_unit = self._get_param_unit_for_multi(row_idx, pname)
 
                     cur.execute("""
                         SELECT 设计数据参数ID FROM 产品设计活动表_设计数据表
                         WHERE 产品ID=%s AND 参数名称=%s
                     """, (self.product_id, db_field))
-                    exists = cur.fetchone() is not None
+                    row = cur.fetchone()
+                    exists = row is not None
 
                     if exists:
+                        existing_param_id = row.get("设计数据参数ID")
+                        if (
+                            not getattr(self, "_multi_id_legacy_high", False)
+                            and existing_param_id != reserved_param_id
+                            and int(existing_param_id or 0) <= int(self._multi_id_safe_threshold or 0) + (len(self.PARAM_NAMES) * 2) + 50
+                        ):
+                            try:
+                                cur.execute("""
+                                    UPDATE 产品设计活动表_设计数据表
+                                    SET 设计数据参数ID=%s
+                                    WHERE 产品ID=%s AND 参数名称=%s
+                                """, (reserved_param_id, self.product_id, db_field))
+                            except Exception as migrate_err:
+                                print(f"[多工况][AutoSave] 参数ID迁移失败({db_field}): {migrate_err}")
                         cur.execute("""
                             UPDATE 产品设计活动表_设计数据表
-                            SET 壳程数值=%s, 管程数值=%s
+                            SET 参数单位=%s, 壳程数值=%s, 管程数值=%s
                             WHERE 产品ID=%s AND 参数名称=%s
-                        """, (kc_val, gc_val, self.product_id, db_field))
+                        """, (param_unit, kc_val, gc_val, self.product_id, db_field))
                     else:
-                        max_sn += 1
                         cur.execute("""
                             INSERT INTO 产品设计活动表_设计数据表
-                                (设计数据参数ID, 产品ID, 参数名称, 壳程数值, 管程数值)
-                            VALUES (%s, %s, %s, %s, %s)
-                        """, (max_sn, self.product_id, db_field, kc_val, gc_val))
+                                (设计数据参数ID, 产品ID, 参数名称, 参数单位, 壳程数值, 管程数值)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        """, (reserved_param_id, self.product_id, db_field, param_unit, kc_val, gc_val))
             conn.commit()
             conn.close()
             
@@ -381,6 +714,9 @@ class MultiConditionsDialog(QDialog):
         self.fill_table(gongkuang_no)
 
         self.current_gongkuang = gongkuang_no
+
+        if getattr(self, "_readonly_local_files", False):
+            self._apply_table_readonly_only()
 
 # 已改
     def _save_to_cache(self, gongkuang_no):

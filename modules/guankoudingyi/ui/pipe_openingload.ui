@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1050</width>
-    <height>780</height>
+    <width>1196</width>
+    <height>825</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -32,9 +32,9 @@
        <item>
         <layout class="QVBoxLayout" name="verticalLayout_6" stretch="1,1">
          <item>
-          <layout class="QHBoxLayout" name="horizontalLayout" stretch="2,1,2">
+          <layout class="QHBoxLayout" name="horizontalLayout" stretch="7,1,3">
            <item>
-            <layout class="QVBoxLayout" name="verticalLayout" stretch="1,1">
+            <layout class="QVBoxLayout" name="verticalLayout" stretch="1,3">
              <item>
               <widget class="QTableWidget" name="yinglijisuan">
                <property name="minimumSize">
@@ -57,19 +57,19 @@
                <attribute name="horizontalHeaderVisible">
                 <bool>false</bool>
                </attribute>
-               <attribute name="horizontalHeaderMinimumSectionSize">
-                <number>50</number>
-               </attribute>
                <attribute name="horizontalHeaderDefaultSectionSize">
                 <number>125</number>
+               </attribute>
+               <attribute name="horizontalHeaderMinimumSectionSize">
+                <number>50</number>
                </attribute>
                <attribute name="verticalHeaderVisible">
                 <bool>false</bool>
                </attribute>
-               <attribute name="verticalHeaderMinimumSectionSize">
+               <attribute name="verticalHeaderDefaultSectionSize">
                 <number>40</number>
                </attribute>
-               <attribute name="verticalHeaderDefaultSectionSize">
+               <attribute name="verticalHeaderMinimumSectionSize">
                 <number>40</number>
                </attribute>
                <row/>
@@ -156,7 +156,7 @@
        <item>
         <layout class="QVBoxLayout" name="verticalLayout_3" stretch="5,4,0">
          <item>
-          <layout class="QHBoxLayout" name="horizontalLayout_2" stretch="0,6,1,4">
+          <layout class="QHBoxLayout" name="horizontalLayout_2" stretch="0,8,1,4">
            <item>
             <layout class="QVBoxLayout" name="verticalLayout_8" stretch="6,10">
              <property name="spacing">

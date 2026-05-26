@@ -6,6 +6,7 @@ from collections import defaultdict
 from PyQt5.QtWidgets import QTableWidget
 
 from modules.cailiaodingyi.db_cnt import get_connection
+from modules.cailiaodingyi.funcs.funcs_pdf_change import DEBUG_VERBOSE_DEFINE_UI
 import pymysql
 
 
@@ -864,6 +865,10 @@ def update_template_input_editable_state(self):
         self.lineEdit_template.clear()  # 可选：禁止时清空内容
 
 
+# 用户「另存为模板」分配的模板ID起始值（与系统内置模板 ID 区分）
+USER_SAVE_TEMPLATE_ID_START = 5000
+
+
 def save_to_template_library(template_name, product_data, product_type, product_form):
     """
     将当前产品定义好的信息存入模板库中
@@ -877,10 +882,18 @@ def save_to_template_library(template_name, product_data, product_type, product_
             if row:
                 template_id = row["模板ID"]
             else:
-                # 2. 生成新的模板ID（最大 + 1）
-                cursor.execute("SELECT MAX(模板ID) AS max_id FROM 元件材料模板表")
+                # 2. 用户另存模板：从 5000 起递增，不与系统模板共用 MAX 全表逻辑
+                cursor.execute(
+                    "SELECT MAX(模板ID) AS max_id FROM 元件材料模板表 WHERE 模板ID >= %s",
+                    (USER_SAVE_TEMPLATE_ID_START,),
+                )
                 max_row = cursor.fetchone()
-                template_id = (max_row["max_id"] or 0) + 1
+                max_id = max_row["max_id"] if max_row else None
+                template_id = (
+                    USER_SAVE_TEMPLATE_ID_START
+                    if max_id is None
+                    else max_id + 1
+                )
             # 3. 遍历插入每一条元件数据
             for item in product_data:
                 cursor.execute("""
@@ -992,6 +1005,90 @@ def insert_guankou_define_data(template_id, updated_guankou_define):
         connection.close()
 
 
+def insert_updated_element_merged_para_data(template_id, updated_element_merged_para):
+    """
+    将从活动库读取到的“元件附加参数合并表”数据写入材料库的 `元件附加参数合并表`。
+
+    updated_element_merged_para 的每一项字段期望：
+    - 元件ID, 参数名称, 参数值, 参数单位, Tab分类
+    """
+    connection = get_connection(**db_config_2)
+    try:
+        with connection.cursor() as cursor:
+            for item in updated_element_merged_para or []:
+                sql = """
+                    INSERT INTO 元件附加参数合并表
+                    (元件ID, 参数名称, 参数值, 参数单位, Tab分类, 模板ID)
+                    VALUES (%s, %s, %s, %s, %s, %s);
+                """
+                cursor.execute(sql, (
+                    item.get("元件ID"),
+                    item.get("参数名称"),
+                    item.get("参数值"),
+                    item.get("参数单位"),
+                    item.get("Tab分类"),
+                    template_id,
+                ))
+
+        connection.commit()
+        print("合并元件附加参数合并表信息已成功插入模板")
+    except pymysql.MySQLError as err:
+        print(f"插入合并表数据时出错: {err}")
+    finally:
+        connection.close()
+
+
+def insert_guankou_attachment_para_data(template_id, updated_guankou_attachment_para):
+    """
+    将从活动库读取到的“管口附件附加参数表”数据写入材料库的 `管口附件附加参数表`。
+
+    updated_guankou_attachment_para 的每一项字段期望：
+    - Tab分类, 附件类型, 标题分组, 参数名称, 参数数值, 参数单位
+    """
+    connection = get_connection(**db_config_2)
+    try:
+        with connection.cursor() as cursor:
+            # 为模板库里的参数ID生成一个连续区间，避免依赖 auto_increment 行为
+            cursor.execute("SELECT COALESCE(MAX(参数ID), 0) as max_id FROM 管口附件附加参数表")
+            max_row = cursor.fetchone() or {}
+            next_param_id = max_row.get("max_id", 0) or 0
+            next_param_id = int(next_param_id) + 1
+
+            for item in updated_guankou_attachment_para or []:
+                param_name = str(item.get("参数名称") or "").strip()
+                # “管口号”是产品上下文的选择结果：模板库中不应保存具体管口号
+                # 否则后续复用模板时会带入错误的管口号。
+                param_value = item.get("参数数值")
+                param_unit = item.get("参数单位")
+                if param_name == "管口号":
+                    param_value = ""
+                    param_unit = ""
+
+                sql = """
+                    INSERT INTO 管口附件附加参数表
+                    (参数ID, 模板ID, Tab分类, 附件类型, 标题分组, 参数名称, 参数数值, 参数单位)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+                """
+                cursor.execute(sql, (
+                    next_param_id,
+                    template_id,
+                    item.get("Tab分类"),
+                    item.get("附件类型"),
+                    item.get("标题分组"),
+                    item.get("参数名称"),
+                    param_value,
+                    param_unit,
+                ))
+                next_param_id += 1
+
+        connection.commit()
+        print("管口附件附加参数表信息已成功插入模板")
+    except pymysql.MySQLError as err:
+        print(f"插入管口附件模板数据时出错: {err}")
+    finally:
+        connection.close()
+
+
 def insert_guankou_para_info(template_id, updated_guankou_para):
     """将从活动库的管口参数表读出的数据写入材料库中的管口参数表"""
     # print(f"插入信息{updated_guankou_para}")
@@ -1084,30 +1181,6 @@ def get_grouped(product_id):
         connection.close()
 
 
-def update_material_category_in_db(port_codes, material_category):
-    """
-    将数据库中指定的管口代号，对应的材料分类字段更新为指定分类
-    """
-    if not port_codes:
-        print("[DB] 空 port_codes，跳过更新")
-        return
-
-    conn = get_connection(**db_config_1)
-    try:
-        with conn.cursor() as cursor:
-            # 构造 SQL：UPDATE 表 SET 材料分类=xxx WHERE 管口代号 IN (...)
-            format_strings = ','.join(['%s'] * len(port_codes))
-            sql = f"""
-                UPDATE 产品设计活动表_管口类别表
-                SET 材料分类 = %s
-                WHERE 管口代号 IN ({format_strings})
-            """
-            cursor.execute(sql, [material_category] + port_codes)
-        conn.commit()
-    finally:
-        conn.close()
-
-
 def get_options_for_param(param_name):
     """根据参数名称从数据库中获取对应的选项列表"""
     excluded_numeric_params = {
@@ -1128,18 +1201,19 @@ def get_options_for_param(param_name):
 
             if result:
                 # 假设查询到的 '参数值' 字段是一个 JSON 字符串，我们将其解析为列表
+                # 假设查询到的 '参数值' 字段是一个 JSON 字符串，我们将其解析为列表
                 options_str = result.get('参数值', '')
                 if options_str:
-                    options = json.loads(options_str)  # 解析 JSON 字符串为 Python 列表
+                    options = json.loads(options_str)
                     return options
                 else:
                     print(f"[警告] 参数 '{param_name}' 没有选项！")
             else:
                 print(f"[警告] 未找到参数 '{param_name}' 的数据！")
 
-            return []  # 如果没有选项，返回空列表
+            return []
     finally:
-            connection.close()
+        connection.close()
 
 
 def get_all_param_name():
@@ -1782,7 +1856,7 @@ def init_buguan_defaults(product_id):
                            WHERE 产品ID=%s
                        """, (product_id,))
             row = cur1.fetchone()
-            if row and (row["产品型式"] == "AEU" or row["产品型式"] == "BEU"):
+            if row and (row["产品型式"] in ["AEU", "BEU", "AKU", "BKU"]):
 
                 # 2. 从元件库读取默认布管参数
                 cur2.execute("SELECT 参数名, 参数值, 单位 FROM 布管参数默认表_u型管")
@@ -1839,6 +1913,55 @@ def query_template_element_merged_para_data(template_id, element_id):
 
 
 
+def delete_material_template_data_by_template_name(template_name: str) -> None:
+    """
+    先通过模板名称查询模板ID，再删除材料库中该模板ID对应的全部数据（仅删除，不插入）。
+    """
+    if not template_name or not str(template_name).strip():
+        raise ValueError("template_name 不能为空")
+    template_id = get_template_id_by_name(str(template_name).strip())
+    if template_id is None:
+        raise ValueError(f"未在材料库中找到模板名称：{template_name}")
+    delete_material_template_data_by_template_id(int(template_id))
+
+
+
+def delete_material_template_data_by_template_id(template_id: int) -> None:
+    """
+    删除材料库中指定模板ID对应的全部数据（仅删除，不插入）。
+    需删除的表：
+    - 管口附加参数表
+    - 管口附件附加参数表
+    - 元件材料模板表
+    - 元件附加参数表
+    - 元件附加参数合并表
+    """
+    if template_id is None:
+        raise ValueError("template_id 不能为空")
+    conn = get_connection(**db_config_2)
+    try:
+        with conn.cursor() as cursor:
+            # 先删“从属表”，再删“主表”，以尽量降低外键约束导致的删除失败风险
+            deletes_in_order = [
+                ("元件附加参数合并表", "元件ID", "元件附加参数合并表 WHERE 模板ID = %s"),
+                ("元件附加参数表", "元件ID", "元件附加参数表 WHERE 模板ID = %s"),
+                ("管口附件附加参数表", "参数ID", "管口附件附加参数表 WHERE 模板ID = %s"),
+                ("管口附加参数表", "管口零件参数ID", "管口附加参数表 WHERE 模板ID = %s"),
+                ("元件材料模板表", "元件ID", "元件材料模板表 WHERE 模板ID = %s"),
+            ]
+            deleted_counts = {}
+            for table_name, _, where_sql in deletes_in_order:
+                sql = f"DELETE FROM {table_name} WHERE 模板ID = %s"
+                cursor.execute(sql, (template_id,))
+                deleted_counts[table_name] = cursor.rowcount
+        conn.commit()
+        print(f"[清除] 已删除模板ID={template_id} 的材料库模板数据: {deleted_counts}")
+    except pymysql.MySQLError as err:
+        conn.rollback()
+        print(f"[错误] 删除模板ID={template_id} 的材料库数据失败: {err}")
+        raise
+    finally:
+        conn.close()
 
 
 
