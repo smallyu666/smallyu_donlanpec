@@ -38,6 +38,22 @@ def on_product_id_changed(new_id):
 # 测试用产品 ID（真实情况中由外部输入）
 product_manager.product_id_changed.connect(on_product_id_changed)
 
+# 0529新修改-修改公称直径后是否需要重新推荐管口公称尺寸和偏心距: --- 缓存管口推荐选择 ---
+PIPE_RECOMMEND_CACHE = {}
+
+def set_pipe_recommend_choice(product_id, choice: bool):
+    PIPE_RECOMMEND_CACHE[str(product_id)] = choice
+
+def get_pipe_recommend_choice(product_id, clear_after_read=True):
+    pid = str(product_id)
+    if pid in PIPE_RECOMMEND_CACHE:
+        val = PIPE_RECOMMEND_CACHE[pid]
+        if clear_after_read:
+            del PIPE_RECOMMEND_CACHE[pid]
+        return val
+    return None
+# ------------------------
+
 
 # 0903会议纪要 添加一个通用的检查函数，用于所有非项目管理界面
 def check_project_and_product():
@@ -1113,6 +1129,25 @@ class DesignConditionInputViewer(QWidget):
                     if not show_confirm_dialog(self, "提示", msg):
                         return (False, missing_fields)
 
+            # --- 0529新修改-修改公称直径后是否需要重新推荐管口公称尺寸和偏心距: 检查公称直径是否修改并弹窗询问 ---
+            if getattr(self, "_is_saved_to_design_db", False):
+                current_dn = self._get_ui_nominal_diameter()
+                initial_dn = getattr(self, "_initial_nominal_diameter", None)
+                if initial_dn is not None and current_dn is not None and initial_dn != current_dn:
+                    reply = QMessageBox.question(
+                        self, 
+                        "提示", 
+                        "是否需要根据公称直径重新推荐管口的公称尺寸和偏心距？",
+                        QMessageBox.Yes | QMessageBox.No, 
+                        QMessageBox.No
+                    )
+                    if reply == QMessageBox.Yes:
+                        QMessageBox.information(self, "提示", "请至”管口及附件定义“界面，重新确认管口信息。")
+                        set_pipe_recommend_choice(self.product_id, True)
+                    else:
+                        set_pipe_recommend_choice(self.product_id, False)
+            # ---------------------------------------------
+
             # 执行保存操作
             if not save_local_condition_file(self.product_id, self):
                 return (False, missing_fields)
@@ -1692,6 +1727,43 @@ class DesignConditionInputViewer(QWidget):
         """标记数据是否已修改"""
         self._is_modified = modified
 
+    # 0529新修改-修改公称直径后是否需要重新推荐管口公称尺寸和偏心距
+    def _get_ui_nominal_diameter(self):
+        """从UI设计数据表中读取公称直径的管程/壳程数值"""
+        if not hasattr(self, "tableWidget_design_data") or self.tableWidget_design_data is None:
+            return None
+        
+        try:
+            for row in range(self.tableWidget_design_data.rowCount()):
+                param_item = self.tableWidget_design_data.item(row, 1)
+                if not param_item:
+                    continue
+                param_name = param_item.text().strip()
+                if param_name.startswith("公称直径"):
+                    shell_val = None
+                    tube_val = None
+                    
+                    shell_item = self.tableWidget_design_data.item(row, 3)
+                    if shell_item and shell_item.text().strip():
+                        try:
+                            shell_val = float(shell_item.text().strip())
+                        except ValueError:
+                            pass
+                            
+                    tube_item = self.tableWidget_design_data.item(row, 4)
+                    if tube_item and tube_item.text().strip():
+                        try:
+                            tube_val = float(tube_item.text().strip())
+                        except ValueError:
+                            pass
+                            
+                    if shell_val is None and tube_val is None:
+                        return None
+                    return (tube_val, shell_val)
+        except Exception as e:
+            print(f"[DEBUG] _get_ui_nominal_diameter 失败: {e}")
+        return None
+
     # 1112新修改-条件输入表格实质性变化
     def _extract_table_data(self, table_widget):
         """提取表格的所有数据内容，用于快照比较（忽略行顺序）"""
@@ -1739,6 +1811,9 @@ class DesignConditionInputViewer(QWidget):
         for table_name, table_widget in tables:
             if table_widget:
                 self._initial_table_snapshots[table_name] = self._extract_table_data(table_widget)
+        
+        # 0529新修改-修改公称直径后是否需要重新推荐管口公称尺寸和偏心距: 记录公称直径初始快照
+        self._initial_nominal_diameter = self._get_ui_nominal_diameter()
 
         print(f"[快照] 已保存 {len(self._initial_table_snapshots)} 个表格的初始状态快照")
 
