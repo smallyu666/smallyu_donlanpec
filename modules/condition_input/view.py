@@ -1130,22 +1130,7 @@ class DesignConditionInputViewer(QWidget):
                         return (False, missing_fields)
 
             # --- 0529新修改-修改公称直径后是否需要重新推荐管口公称尺寸和偏心距: 检查公称直径是否修改并弹窗询问 ---
-            if getattr(self, "_is_saved_to_design_db", False):
-                current_dn = self._get_ui_nominal_diameter()
-                initial_dn = getattr(self, "_initial_nominal_diameter", None)
-                if initial_dn is not None and current_dn is not None and initial_dn != current_dn:
-                    reply = QMessageBox.question(
-                        self, 
-                        "提示", 
-                        "是否需要根据公称直径重新推荐管口的公称尺寸和偏心距？",
-                        QMessageBox.Yes | QMessageBox.No, 
-                        QMessageBox.No
-                    )
-                    if reply == QMessageBox.Yes:
-                        QMessageBox.information(self, "提示", "请至”管口及附件定义“界面，重新确认管口信息。")
-                        set_pipe_recommend_choice(self.product_id, True)
-                    else:
-                        set_pipe_recommend_choice(self.product_id, False)
+            self._prompt_nominal_diameter_change_if_needed()
             # ---------------------------------------------
 
             # 执行保存操作
@@ -1248,6 +1233,8 @@ class DesignConditionInputViewer(QWidget):
                 if self._has_substantial_changes():
                     try:
                         # 执行保存操作
+                        # 0529新修改-修改公称直径后是否需要重新推荐管口公称尺寸和偏心距
+                        self._prompt_nominal_diameter_change_if_needed()
                         if not save_local_condition_file(self.product_id, self):
                             raise IOError("保存本地条件文件失败。")
                         save_all_tables(self, self.product_id)
@@ -1301,6 +1288,8 @@ class DesignConditionInputViewer(QWidget):
             # 用户选择继续关闭，需要保存数据
             try:
                 # 执行保存操作
+                # 0529新修改-修改公称直径后是否需要重新推荐管口公称尺寸和偏心距
+                self._prompt_nominal_diameter_change_if_needed()
                 if not save_local_condition_file(self.product_id, self):
                     raise IOError("保存本地条件文件失败。")
                 save_all_tables(self, self.product_id)
@@ -1375,6 +1364,8 @@ class DesignConditionInputViewer(QWidget):
                 if self._has_substantial_changes():
                     try:
                         # 执行保存操作
+                        # 0529新修改-修改公称直径后是否需要重新推荐管口公称尺寸和偏心距
+                        self._prompt_nominal_diameter_change_if_needed()
                         if not save_local_condition_file(self.product_id, self):
                             raise IOError("保存本地条件文件失败。")
                         save_all_tables(self, self.product_id)
@@ -1432,6 +1423,8 @@ class DesignConditionInputViewer(QWidget):
             # 用户选择继续切换，需要保存数据
             try:
                 # 执行核心保存操作
+                # 0529新修改-修改公称直径后是否需要重新推荐管口公称尺寸和偏心距
+                self._prompt_nominal_diameter_change_if_needed()
                 if not save_local_condition_file(self.product_id, self):
                     raise IOError("保存本地条件文件失败。")
                 save_all_tables(self, self.product_id)
@@ -1726,6 +1719,26 @@ class DesignConditionInputViewer(QWidget):
     def _set_modified(self, modified=True):
         """标记数据是否已修改"""
         self._is_modified = modified
+
+    # 0529新修改-修改公称直径后是否需要重新推荐管口公称尺寸和偏心距
+    def _prompt_nominal_diameter_change_if_needed(self):
+        """检查公称直径是否修改并弹窗询问"""
+        if getattr(self, "_is_saved_to_design_db", False):
+            current_dn = self._get_ui_nominal_diameter()
+            initial_dn = getattr(self, "_initial_nominal_diameter", None)
+            if initial_dn is not None and current_dn is not None and initial_dn != current_dn:
+                reply = QMessageBox.question(
+                    self, 
+                    "提示", 
+                    "是否需要根据公称直径重新推荐管口的公称尺寸和偏心距？",
+                    QMessageBox.Yes | QMessageBox.No, 
+                    QMessageBox.No
+                )
+                if reply == QMessageBox.Yes:
+                    QMessageBox.information(self, "提示", "请至”管口及附件定义“界面，重新确认管口信息。")
+                    set_pipe_recommend_choice(self.product_id, True)
+                else:
+                    set_pipe_recommend_choice(self.product_id, False)
 
     # 0529新修改-修改公称直径后是否需要重新推荐管口公称尺寸和偏心距
     def _get_ui_nominal_diameter(self):
