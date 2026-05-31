@@ -8,6 +8,12 @@ import re
 from modules.guankoudingyi.db_cnt import get_connection, db_config_1, db_config_2
 
 
+class NoWheelComboBox(QComboBox):
+    """与管口定义页一致：禁止滚轮误改值"""
+    def wheelEvent(self, e):
+        e.ignore()
+
+
 class LocalStressCalcTypeComboDelegate(QStyledItemDelegate):
     """局部应力计算类型下拉框代理（仅对第二行第二列生效）"""
     
@@ -31,7 +37,7 @@ class LocalStressCalcTypeComboDelegate(QStyledItemDelegate):
         """创建编辑器（下拉框），仅对目标单元格生效"""
         # 只对第二行第二列创建下拉框
         if index.row() == self.target_row and index.column() == self.target_col:
-            editor = QComboBox(parent)
+            editor = NoWheelComboBox(parent)
             editor.addItems(self.items)
             editor.setEditable(False)  # 不可编辑，只能选择
             # 设置下拉框选项之间的间距
@@ -70,6 +76,24 @@ class LocalStressCalcTypeComboDelegate(QStyledItemDelegate):
     def updateEditorGeometry(self, editor, option, index):
         """更新编辑器的几何位置"""
         editor.setGeometry(option.rect)
+
+
+class NumericValueDelegate(QStyledItemDelegate):
+    """zaihecanshu 第二列数值输入代理：仅允许数值（含负号与小数）。"""
+
+    def createEditor(self, parent, option, index):
+        # 仅对第二列生效，其他列沿用默认编辑器
+        if index.column() != 1:
+            return super().createEditor(parent, option, index)
+
+        editor = QLineEdit(parent)
+        validator = QDoubleValidator(editor)
+        validator.setNotation(QDoubleValidator.StandardNotation)
+        validator.setDecimals(8)
+        validator.setBottom(-1e20)
+        validator.setTop(1e20)
+        editor.setValidator(validator)
+        return editor
 
 """读取局部应力计算类型的下拉框内容"""
 def get_local_stress_calc_types_from_db():
@@ -490,12 +514,26 @@ def fill_load_params_by_calc_type(dialog: QDialog, calc_type: str):
             item.setFlags(item.flags() & ~Qt.ItemIsEditable & ~Qt.ItemIsSelectable)
             table.setItem(row_index, 0, item)
             
-            # 确保第二列已存在item并设置居中对齐
+            # 确保第二列已存在 item 并设置规则（参数值在切换类型时由 clear_zaihecanshu_parameter_values 清空）
             item_col1 = table.item(row_index, 1)
             if item_col1 is None:
                 item_col1 = QTableWidgetItem()
                 table.setItem(row_index, 1, item_col1)
-            item_col1.setTextAlignment(Qt.AlignCenter)
+            if _is_fixed_zero_angle_param(param):
+                _set_fixed_zero_angle_cell_style(item_col1)
+            else:
+                item_col1.setTextAlignment(Qt.AlignCenter)
+                item_col1.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable)
+                item_col1.setBackground(QBrush(QColor(255, 255, 255)))
+
+        # 行数变化后，同步重设表格高度：有几行就只显示几行（避免内部空白）
+        fixed_row_height = 40
+        for r in range(table.rowCount()):
+            table.setRowHeight(r, fixed_row_height)
+        total_height = fixed_row_height * table.rowCount() + 2
+        table.setFixedHeight(total_height)
+        table.setMinimumHeight(total_height)
+        table.setMaximumHeight(total_height)
         
 
         
@@ -607,7 +645,7 @@ def load_pipe_load_data_from_db(product_id, pipe_id):
     从产品设计活动库的产品设计活动表_管口载荷表中加载数据
     :param product_id: 产品ID
     :param pipe_id: 管口ID
-    :return: 字典，包含局部应力符号和局部应力计算类型，如果不存在则返回None
+    :return: 字典，键为参数名称，值为参数值；若不存在返回None
     """
     if not product_id or not pipe_id:
         return None
@@ -619,19 +657,23 @@ def load_pipe_load_data_from_db(product_id, pipe_id):
         cursor = conn.cursor()
         
         sql = """
-            SELECT 局部应力符号, 局部应力计算类型
+            SELECT 参数名称, 参数值
             FROM 产品设计活动表_管口载荷表
             WHERE 产品ID = %s AND 管口ID = %s
-            LIMIT 1
+              AND 参数名称 IN ('局部应力符号', '局部应力计算类型', '载荷作用位置')
         """
         cursor.execute(sql, (product_id, pipe_id))
-        result = cursor.fetchone()
-        
-        if result:
-            return {
-                "局部应力符号": result.get("局部应力符号") if result.get("局部应力符号") else None,
-                "局部应力计算类型": result.get("局部应力计算类型") if result.get("局部应力计算类型") else None
-            }
+        results = cursor.fetchall()
+
+        if results:
+            data = {}
+            for row in results:
+                param_name = (row.get("参数名称") or "").strip()
+                if not param_name:
+                    continue
+                param_value = row.get("参数值")
+                data[param_name] = str(param_value).strip() if param_value is not None else None
+            return data if data else None
         return None
         
     except Exception as e:
@@ -668,49 +710,61 @@ def load_second_tab_params_from_db(dialog: QDialog, product_id: int, pipe_id: in
     try:
         conn = get_connection(**db_config_2)
         cursor = conn.cursor()
-        
-        # 查询该产品ID和管口ID对应的所有字段值
-        sql = """
-            SELECT * FROM 产品设计活动表_管口载荷表
-            WHERE 产品ID = %s AND 管口ID = %s
-            LIMIT 1
-        """
-        cursor.execute(sql, (product_id, pipe_id))
-        result = cursor.fetchone()
-        
-        if not result:
-            # 如果没有数据，直接返回
-            return
-        
-        # 从第一行开始（索引0）遍历（原逻辑是从索引2开始，这里配合新的表头布局改为0）
-        start_row = 0
-        for row in range(start_row, table.rowCount()):
-            # 获取第一列的参数名称（字段名）
+
+        # 先收集表格第一列的参数名称
+        param_names = []
+        for row in range(table.rowCount()):
             param_item = table.item(row, 0)
             if not param_item:
                 continue
-            
-            field_name = param_item.text().strip()
-            if not field_name:
+            name = param_item.text().strip()
+            if name:
+                param_names.append(name)
+
+        if not param_names:
+            return
+
+        placeholders = ", ".join(["%s"] * len(param_names))
+        sql = f"""
+            SELECT 参数名称, 参数值
+            FROM 产品设计活动表_管口载荷表
+            WHERE 产品ID = %s AND 管口ID = %s
+              AND 参数名称 IN ({placeholders})
+        """
+        cursor.execute(sql, [product_id, pipe_id, *param_names])
+        rows = cursor.fetchall() or []
+
+        value_map = {}
+        for r in rows:
+            k = (r.get("参数名称") or "").strip()
+            if not k:
                 continue
-            
-            # 从数据库结果中获取对应的值
-            value = result.get(field_name)
-            
-            # 如果值不为空，填入第二列
-            if value is not None:
-                # 将值转换为字符串
-                value_str = str(value).strip()
-                if value_str:
-                    # 获取或创建第二列的item
-                    value_item = table.item(row, 1)
-                    if value_item is None:
-                        value_item = QTableWidgetItem(value_str)
-                        value_item.setTextAlignment(Qt.AlignCenter)
-                        table.setItem(row, 1, value_item)
-                    else:
-                        value_item.setText(value_str)
-        
+            v = r.get("参数值")
+            value_map[k] = "" if v is None else str(v).strip()
+
+        # 回填第二列
+        for row in range(table.rowCount()):
+            param_item = table.item(row, 0)
+            if not param_item:
+                continue
+            name = param_item.text().strip()
+            if not name:
+                continue
+
+            value_str = value_map.get(name, "")
+            value_item = table.item(row, 1)
+            if value_item is None:
+                value_item = QTableWidgetItem(value_str)
+                value_item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(row, 1, value_item)
+            if _is_fixed_zero_angle_param(name):
+                _set_fixed_zero_angle_cell_style(value_item)
+            else:
+                value_item.setText(value_str)
+                value_item.setTextAlignment(Qt.AlignCenter)
+                value_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable)
+                value_item.setBackground(QBrush(QColor(255, 255, 255)))
+
     except Exception as e:
         print(f"[ERROR] 加载第二个tab页参数值失败: {e}")
         import traceback
@@ -720,6 +774,168 @@ def load_second_tab_params_from_db(dialog: QDialog, product_id: int, pipe_id: in
             cursor.close()
         if conn:
             conn.close()
+
+
+def get_reference_pipe_candidates(product_id: int, current_pipe_id: int, calc_type: str):
+    """
+    查询可作为“参考引用”的管口：
+    - 同一产品
+    - 局部应力计算类型与当前一致
+    - 非当前管口
+    - 在第二界面参数中至少有一项已填写（参数值非空）
+    """
+    if not product_id or not current_pipe_id or not calc_type:
+        return []
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_connection(**db_config_2)
+        cursor = conn.cursor()
+        sql = """
+            SELECT DISTINCT t.管口ID, code_map.管口代号
+            FROM 产品设计活动表_管口载荷表 t
+            LEFT JOIN (
+                SELECT 产品ID, 管口ID, MAX(NULLIF(TRIM(管口代号), '')) AS 管口代号
+                FROM 产品设计活动表_管口载荷表
+                WHERE 参数名称 IN ('局部应力符号', '局部应力计算类型', '载荷作用位置')
+                GROUP BY 产品ID, 管口ID
+            ) code_map
+                ON code_map.产品ID = t.产品ID
+               AND code_map.管口ID = t.管口ID
+            INNER JOIN 产品设计活动表_管口载荷表 ct
+                ON ct.产品ID = t.产品ID
+               AND ct.管口ID = t.管口ID
+               AND ct.参数名称 = '局部应力计算类型'
+               AND TRIM(COALESCE(ct.参数值, '')) = TRIM(%s)
+            WHERE t.产品ID = %s
+              AND t.管口ID <> %s
+              AND t.参数名称 NOT IN ('局部应力符号', '局部应力计算类型', '载荷作用位置')
+              AND COALESCE(TRIM(t.参数值), '') <> ''
+            ORDER BY code_map.管口代号
+        """
+        cursor.execute(sql, (calc_type.strip(), product_id, current_pipe_id))
+        rows = cursor.fetchall() or []
+        result = []
+        for row in rows:
+            code = (row.get("管口代号") or "").strip()
+            pid = row.get("管口ID")
+            if not pid:
+                continue
+            # 仅显示真实管口代号；若未查到代号则不展示该候选
+            if not code:
+                continue
+            result.append({"pipe_id": pid, "pipe_code": code})
+        return result
+    except Exception as e:
+        print(f"[ERROR] 查询参考引用候选管口失败: {e}")
+        return []
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+def apply_reference_pipe_params(dialog: QDialog, product_id: int, ref_pipe_id: int):
+    """按参数名称从参考管口读取第二页参数值并回填到当前 zaihecanshu 表格。"""
+    if not dialog or not product_id or not ref_pipe_id:
+        return
+    table: QTableWidget = dialog.findChild(QTableWidget, "zaihecanshu")
+    if not table:
+        return
+
+    param_names = []
+    for row in range(table.rowCount()):
+        name_item = table.item(row, 0)
+        name = name_item.text().strip() if name_item and name_item.text() else ""
+        if name:
+            param_names.append(name)
+    if not param_names:
+        return
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_connection(**db_config_2)
+        cursor = conn.cursor()
+        placeholders = ", ".join(["%s"] * len(param_names))
+        sql = f"""
+            SELECT 参数名称, 参数值
+            FROM 产品设计活动表_管口载荷表
+            WHERE 产品ID = %s AND 管口ID = %s
+              AND 参数名称 IN ({placeholders})
+        """
+        cursor.execute(sql, [product_id, ref_pipe_id, *param_names])
+        rows = cursor.fetchall() or []
+        value_map = {}
+        for r in rows:
+            name = (r.get("参数名称") or "").strip()
+            if not name:
+                continue
+            v = r.get("参数值")
+            value_map[name] = "" if v is None else str(v).strip()
+
+        table.blockSignals(True)
+        try:
+            for row in range(table.rowCount()):
+                name_item = table.item(row, 0)
+                name = name_item.text().strip() if name_item and name_item.text() else ""
+                if not name:
+                    continue
+                value_item = table.item(row, 1)
+                if value_item is None:
+                    value_item = QTableWidgetItem()
+                    value_item.setTextAlignment(Qt.AlignCenter)
+                    table.setItem(row, 1, value_item)
+                if _is_fixed_zero_angle_param(name):
+                    _set_fixed_zero_angle_cell_style(value_item)
+                else:
+                    value_item.setText(value_map.get(name, ""))
+                    value_item.setTextAlignment(Qt.AlignCenter)
+                    value_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable)
+                    value_item.setBackground(QBrush(QColor(255, 255, 255)))
+        finally:
+            table.blockSignals(False)
+    except Exception as e:
+        print(f"[ERROR] 引用管口参数失败: {e}")
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+def refresh_reference_pipe_dropdown(dialog: QDialog, product_id: int, current_pipe_id: int):
+    """刷新 justlike 第1行第2列（参考引用）下拉项：同局部应力计算类型的可引用管口代号。"""
+    if not dialog:
+        return
+    justlike_table: QTableWidget = dialog.findChild(QTableWidget, "justlike")
+    ylj_table: QTableWidget = dialog.findChild(QTableWidget, "yinglijisuan")
+    if not justlike_table or justlike_table.rowCount() < 1 or not ylj_table:
+        return
+
+    calc_type_item = ylj_table.item(1, 1)
+    calc_type = calc_type_item.text().strip() if calc_type_item and calc_type_item.text() else ""
+    candidates = get_reference_pipe_candidates(product_id, current_pipe_id, calc_type)
+    options = [x["pipe_code"] for x in candidates]
+    dialog._reference_pipe_id_map = {x["pipe_code"]: x["pipe_id"] for x in candidates}
+
+    # 仅作用于第1行（索引0）第2列，保留第2行载荷作用位置原有下拉逻辑
+    ref_delegate = LocalStressCalcTypeComboDelegate(
+        justlike_table, options=options, target_row=0, target_col=1
+    )
+    ref_delegate.setParent(justlike_table)
+    justlike_table.setItemDelegateForRow(0, ref_delegate)
+
+    item = justlike_table.item(0, 1)
+    if item is None:
+        item = QTableWidgetItem()
+        item.setTextAlignment(Qt.AlignCenter)
+        justlike_table.setItem(0, 1, item)
+    current_text = item.text().strip() if item.text() else ""
+    if current_text and current_text not in dialog._reference_pipe_id_map:
+        item.setText("")
 
 """保存管口载荷数据到数据库（随输随存）"""
 def save_pipe_load_data_to_db(product_id, pipe_id, pipe_code, local_stress_symbol, local_stress_calc_type):
@@ -741,23 +957,31 @@ def save_pipe_load_data_to_db(product_id, pipe_id, pipe_code, local_stress_symbo
         conn = get_connection(**db_config_2)
         cursor = conn.cursor()
         
-        # 使用 INSERT ... ON DUPLICATE KEY UPDATE 实现插入或更新
-        sql = """
-            INSERT INTO 产品设计活动表_管口载荷表 
-                (管口ID, 产品ID, 管口代号, 局部应力符号, 局部应力计算类型)
-            VALUES (%s, %s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE
-                管口代号 = VALUES(管口代号),
-                局部应力符号 = VALUES(局部应力符号),
-                局部应力计算类型 = VALUES(局部应力计算类型)
-        """
-        
         # 处理空值，如果为空则设为None
         pipe_code_val = pipe_code.strip() if pipe_code and pipe_code.strip() else None
         symbol_val = local_stress_symbol.strip() if local_stress_symbol and local_stress_symbol.strip() else None
         calc_type_val = local_stress_calc_type.strip() if local_stress_calc_type and local_stress_calc_type.strip() else None
-        
-        cursor.execute(sql, (pipe_id, product_id, pipe_code_val, symbol_val, calc_type_val))
+
+        # 新表结构：参数名称/参数值键值存储
+        # 先删除旧记录，再插入两条参数，避免唯一键不含“参数名称”时发生互相覆盖
+        delete_sql = """
+            DELETE FROM 产品设计活动表_管口载荷表
+            WHERE 管口ID = %s AND 产品ID = %s
+              AND 参数名称 IN ('局部应力符号', '局部应力计算类型')
+        """
+        cursor.execute(delete_sql, (pipe_id, product_id))
+
+        insert_sql = """
+            INSERT INTO 产品设计活动表_管口载荷表 
+                (管口ID, 产品ID, 管口代号, 参数名称, 参数值)
+            VALUES (%s, %s, %s, %s, %s)
+        """
+
+        payloads = [
+            (pipe_id, product_id, pipe_code_val, "局部应力符号", symbol_val),
+            (pipe_id, product_id, pipe_code_val, "局部应力计算类型", calc_type_val),
+        ]
+        cursor.executemany(insert_sql, payloads)
         conn.commit()
         
         #print(f"[保存管口载荷] 保存成功: 产品ID={product_id}, 管口ID={pipe_id}, 管口代号={pipe_code_val}, 局部应力符号={symbol_val}, 局部应力计算类型={calc_type_val}")
@@ -773,6 +997,192 @@ def save_pipe_load_data_to_db(product_id, pipe_id, pipe_code, local_stress_symbo
             cursor.close()
         if conn:
             conn.close()
+
+"""保存管口载荷（随输随存）"""
+# def save_pipe_load_data_by_table(product_id, pipe_id, pipe_code, table: QTableWidget, rows=None):
+#     """
+#     将指定行的“第一列参数名称 + 第二列参数值”写入数据库。
+#     :param product_id: 产品ID
+#     :param pipe_id: 管口ID
+#     :param pipe_code: 管口代号
+#     :param table: 局部应力数据输入表格
+#     :param rows: 需要保存的行号列表；None 时默认保存前两行
+#     """
+#     if not product_id or not pipe_id or table is None:
+#         print("[保存管口载荷] 参数不完整，跳过保存")
+#         return
+#
+#     target_rows = rows if rows is not None else [0, 1]
+#     pipe_code_val = pipe_code.strip() if pipe_code and pipe_code.strip() else None
+#     payloads = []
+#     param_names = []
+#
+#     for r in target_rows:
+#         if r < 0 or r >= table.rowCount():
+#             continue
+#         name_item = table.item(r, 0)
+#         value_item = table.item(r, 1)
+#         param_name = name_item.text().strip() if name_item and name_item.text() else ""
+#         if not param_name:
+#             continue
+#         param_value = value_item.text().strip() if value_item and value_item.text() else None
+#         payloads.append((pipe_id, product_id, pipe_code_val, param_name, param_value))
+#         param_names.append(param_name)
+#
+#     if not payloads:
+#         return
+#
+#     conn = None
+#     cursor = None
+#     try:
+#         conn = get_connection(**db_config_2)
+#         cursor = conn.cursor()
+#
+#         placeholders = ",".join(["%s"] * len(param_names))
+#         delete_sql = f"""
+#             DELETE FROM 产品设计活动表_管口载荷表
+#             WHERE 管口ID = %s AND 产品ID = %s
+#               AND 参数名称 IN ({placeholders})
+#         """
+#         cursor.execute(delete_sql, [pipe_id, product_id, *param_names])
+#
+#         insert_sql = """
+#             INSERT INTO 产品设计活动表_管口载荷表
+#                 (管口ID, 产品ID, 管口代号, 参数名称, 参数值)
+#             VALUES (%s, %s, %s, %s, %s)
+#         """
+#         cursor.executemany(insert_sql, payloads)
+#         conn.commit()
+#     except Exception as e:
+#         print(f"[ERROR] 按表格保存管口载荷失败: {e}")
+#         import traceback
+#         traceback.print_exc()
+#         if conn:
+#             conn.rollback()
+#     finally:
+#         if cursor:
+#             cursor.close()
+#         if conn:
+#             conn.close()
+def save_pipe_load_data_by_table(product_id, pipe_id, pipe_code, table: QTableWidget, rows=None):
+    """
+    将指定行的“第一列参数名称 + 第二列参数值”写入数据库。
+    :param product_id: 产品ID
+    :param pipe_id: 管口ID
+    :param pipe_code: 管口代号
+    :param table: 局部应力数据输入表格
+    :param rows: 需要保存的行号列表；None 时默认保存前两行
+    """
+    if not product_id or not pipe_id or table is None:
+        print("[保存管口载荷] 参数不完整，跳过保存")
+        return
+
+    target_rows = rows if rows is not None else [0, 1]
+    # 管口代号优先从产品设计活动表_管口表读取；若不存在再回退到界面传入值
+    ui_pipe_code_val = pipe_code.strip() if (pipe_code and pipe_code.strip()) else None
+    pipe_code_val = ui_pipe_code_val
+    lookup_conn = None
+    lookup_cursor = None
+    try:
+        lookup_conn = get_connection(**db_config_2)
+        lookup_cursor = lookup_conn.cursor()
+        lookup_cursor.execute("""
+            SELECT 管口代号
+            FROM 产品设计活动表_管口表
+            WHERE 产品ID = %s AND 管口ID = %s
+            LIMIT 1
+        """, (product_id, pipe_id))
+        row = lookup_cursor.fetchone()
+        db_pipe_code = (row.get("管口代号") or "").strip() if row else ""
+        if db_pipe_code:
+            pipe_code_val = db_pipe_code
+    except Exception as e:
+        print(f"[WARN] 读取管口表中的管口代号失败，回退界面值: {e}")
+    finally:
+        if lookup_cursor:
+            try:
+                lookup_cursor.close()
+            except:
+                pass
+        if lookup_conn:
+            try:
+                lookup_conn.close()
+            except:
+                pass
+    payloads = []
+    param_names = []
+
+    for r in target_rows:
+        # 行号越界检查
+        if r < 0 or r >= table.rowCount():
+            continue
+
+        # 获取单元格 item（QTableWidget 空单元格会返回 None）
+        name_item = table.item(r, 0)
+        value_item = table.item(r, 1)
+
+        # 参数名称必须有效
+        param_name = name_item.text().strip() if (name_item and name_item.text()) else ""
+        if not param_name:
+            continue
+
+        # 参数值：空字符串转为 None，方便数据库存储 NULL
+        param_value = value_item.text().strip() if (value_item and value_item.text()) else None
+        param_value = param_value if param_value else None
+
+        payloads.append((pipe_id, product_id, pipe_code_val, param_name, param_value))
+        param_names.append(param_name)
+
+    if not payloads:
+        print("[保存管口载荷] 无有效数据需要保存")
+        return
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_connection(**db_config_2)
+        cursor = conn.cursor()
+
+        # ============== 修复 BUG：动态生成 IN 占位符 ==============
+        param_placeholders = ", ".join(["%s"] * len(param_names))
+        delete_sql = f"""
+            DELETE FROM 产品设计活动表_管口载荷表
+            WHERE 管口ID = %s AND 产品ID = %s
+              AND 参数名称 IN ({param_placeholders})
+        """
+        # 拼接参数：[管口ID, 产品ID, 参数1, 参数2, ...]
+        delete_params = [pipe_id, product_id] + param_names
+        cursor.execute(delete_sql, delete_params)
+
+        # 批量插入
+        insert_sql = """
+            INSERT INTO 产品设计活动表_管口载荷表
+                (管口ID, 产品ID, 管口代号, 参数名称, 参数值)
+            VALUES (%s, %s, %s, %s, %s)
+        """
+        cursor.executemany(insert_sql, payloads)
+
+        conn.commit()
+        print(f"[保存管口载荷] 成功保存 {len(payloads)} 条数据")
+
+    except Exception as e:
+        print(f"[ERROR] 按表格保存管口载荷失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        if conn:
+            conn.rollback()
+    finally:
+        # 安全关闭游标和连接
+        if cursor:
+            try:
+                cursor.close()
+            except:
+                pass
+        if conn:
+            try:
+                conn.close()
+            except:
+                pass
 
 """保存第二个tab页的载荷参数数据到数据库"""
 def save_second_tab_load_params_to_db(dialog: QDialog, product_id: int, pipe_id: int):
@@ -793,73 +1203,77 @@ def save_second_tab_load_params_to_db(dialog: QDialog, product_id: int, pipe_id:
         print("[保存第二个tab页载荷参数] 未找到zaihecanshu控件")
         return
     
+    # 获取管口代号，作为记录中的冗余字段一并保存
+    # 优先从产品设计活动表_管口表按 产品ID+管口ID 获取；查不到再回退界面值
+    pipe_code = None
+    parent_stats = dialog.parent()
+    if parent_stats and hasattr(parent_stats, "lineEdit_productpipeCode"):
+        try:
+            pipe_code = parent_stats.lineEdit_productpipeCode.text().strip()
+        except Exception:
+            pipe_code = None
+
     conn = None
     cursor = None
     try:
         conn = get_connection(**db_config_2)
         cursor = conn.cursor()
-        
-        # 构建UPDATE语句的SET部分
-        updates = []
-        values = []
-        
-        # 从第一行开始（索引0）遍历，参考引用已移到justlike表
-        start_row = 0
-        for row in range(start_row, table.rowCount()):
-            # 获取第一列的参数名称（字段名）
+
+        # 优先读取数据库中的最新管口代号
+        cursor.execute("""
+            SELECT 管口代号
+            FROM 产品设计活动表_管口表
+            WHERE 产品ID = %s AND 管口ID = %s
+            LIMIT 1
+        """, (product_id, pipe_id))
+        row = cursor.fetchone()
+        db_pipe_code = (row.get("管口代号") or "").strip() if row else ""
+        if db_pipe_code:
+            pipe_code = db_pipe_code
+
+        payloads = []
+        param_names = []
+
+        for row in range(table.rowCount()):
             param_item = table.item(row, 0)
             if not param_item:
                 continue
-            
-            field_name = param_item.text().strip()
-            if not field_name:
+
+            param_name = param_item.text().strip()
+            if not param_name:
                 continue
-            
-            # 获取第二列的数值
+
             value_item = table.item(row, 1)
             value_text = value_item.text().strip() if value_item else ""
-            
-            # 验证是否为有效的数值
-            if value_text:
-                try:
-                    value = float(value_text)
-                    # 将字段名添加到更新列表（注意：字段名需要用反引号包裹）
-                    updates.append(f"`{field_name}` = %s")
-                    values.append(value)
-                except ValueError:
-                    # 如果不是有效数值，跳过该行
-                    print(f"[保存第二个tab页载荷参数] 警告：第{row+1}行的值 '{value_text}' 不是有效数值，跳过")
-                    continue
-            else:
-                # 如果为空，设置为NULL
-                updates.append(f"`{field_name}` = %s")
-                values.append(None)
-        
-        # 如果没有需要更新的字段，直接返回
-        if not updates:
+            param_value = value_text if value_text else None
+
+            payloads.append((pipe_id, product_id, pipe_code, param_name, param_value))
+            param_names.append(param_name)
+
+        if not payloads:
             print("[保存第二个tab页载荷参数] 没有需要更新的数据")
             return
-        
-        # 构建完整的UPDATE语句
-        set_clause = ", ".join(updates)
-        sql = f"""
-            UPDATE 产品设计活动表_管口载荷表 
-            SET {set_clause}
-            WHERE 产品ID = %s AND 管口ID = %s
+
+        param_placeholders = ", ".join(["%s"] * len(param_names))
+        delete_sql = f"""
+            DELETE FROM 产品设计活动表_管口载荷表
+            WHERE 管口ID = %s AND 产品ID = %s
+              AND 参数名称 IN ({param_placeholders})
         """
-        
-        # 添加WHERE条件的参数
-        values.extend([product_id, pipe_id])
-        
-        # 执行更新
-        cursor.execute(sql, values)
+        delete_params = [pipe_id, product_id] + param_names
+        cursor.execute(delete_sql, delete_params)
+
+        insert_sql = """
+            INSERT INTO 产品设计活动表_管口载荷表
+                (管口ID, 产品ID, 管口代号, 参数名称, 参数值)
+            VALUES (%s, %s, %s, %s, %s)
+        """
+        cursor.executemany(insert_sql, payloads)
         conn.commit()
-        
-        print(f"[保存第二个tab页载荷参数] 成功更新 {len(updates)} 个字段: 产品ID={product_id}, 管口ID={pipe_id}")
-        
-        # 显示保存成功提示
+
+        print(f"[保存第二个tab页载荷参数] 成功保存 {len(payloads)} 条参数: 产品ID={product_id}, 管口ID={pipe_id}")
         QMessageBox.information(dialog, "提示", "保存成功！", QMessageBox.Ok)
-        
+
     except Exception as e:
         print(f"[ERROR] 保存第二个tab页载荷参数失败: {e}")
         import traceback
@@ -872,11 +1286,121 @@ def save_second_tab_load_params_to_db(dialog: QDialog, product_id: int, pipe_id:
         if conn:
             conn.close()
 
+"""切换局部应力计算类型时，清空第二个界面参数记录"""
+def clear_second_tab_params_in_db(product_id: int, pipe_id: int):
+    """
+    删除当前管口在载荷表中的第二界面（zaihecanshu）及 justlike 中的载荷作用位置等，
+    仅保留第一页 yinglijisuan 的两项：
+    - 局部应力符号
+    - 局部应力计算类型
+    （载荷作用位置在第二套 UI 中，切换计算类型后一并清除，需用户在第二界面点确认重新保存）
+    """
+    if not product_id or not pipe_id:
+        return
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_connection(**db_config_2)
+        cursor = conn.cursor()
+        cursor.execute("""
+            DELETE FROM 产品设计活动表_管口载荷表
+            WHERE 产品ID = %s AND 管口ID = %s
+              AND 参数名称 NOT IN ('局部应力符号', '局部应力计算类型')
+        """, (product_id, pipe_id))
+        conn.commit()
+    except Exception as e:
+        print(f"[ERROR] 清空第二界面参数失败: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+# 与 setup_justlike_table 中第2行第2列默认文案一致
+_DEFAULT_LOAD_POSITION_TEXT = "载荷作用于接管顶部"
+# 第二个页面固定规则：该参数默认值恒为 0，且不可编辑
+_FIXED_ZERO_ANGLE_PARAM_KEYWORD = "两坐标系之夹角(°)"
+
+
+def _is_fixed_zero_angle_param(param_name: str) -> bool:
+    """判断是否为第二个页面中固定为 0 的角度参数。"""
+    text = (param_name or "").strip()
+    if not text:
+        return False
+    # 容错：参数名可能带空格、单位（如“(°)”）或全角括号，统一归一化后做包含匹配
+    normalized = (
+        text.replace(" ", "")
+        .replace("\u3000", "")
+        .replace("（", "(")
+        .replace("）", ")")
+    )
+    keyword = (
+        _FIXED_ZERO_ANGLE_PARAM_KEYWORD.replace(" ", "")
+        .replace("\u3000", "")
+        .replace("（", "(")
+        .replace("）", ")")
+    )
+    return keyword in normalized
+
+
+def _set_fixed_zero_angle_cell_style(item: QTableWidgetItem):
+    """将目标单元格设置为默认值 0、灰底、不可编辑。"""
+    if item is None:
+        return
+    item.setText("0")
+    item.setTextAlignment(Qt.AlignCenter)
+    item.setFlags(item.flags() & ~Qt.ItemIsEditable & ~Qt.ItemIsSelectable)
+    item.setBackground(QBrush(QColor(240, 240, 240)))
+
+
+def reset_justlike_load_position_to_default(dialog: QDialog):
+    """切换局部应力计算类型时，将 justlike 表中「载荷作用位置」恢复为默认值。"""
+    if not dialog:
+        return
+    table = dialog.findChild(QTableWidget, "justlike")
+    if not table or table.rowCount() < 2:
+        return
+    item = table.item(1, 1)
+    if item is None:
+        item = QTableWidgetItem(_DEFAULT_LOAD_POSITION_TEXT)
+        item.setTextAlignment(Qt.AlignCenter)
+        item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable)
+        table.setItem(1, 1, item)
+    else:
+        item.setText(_DEFAULT_LOAD_POSITION_TEXT)
+
+
+def clear_zaihecanshu_parameter_values(dialog: QDialog):
+    """清空第二个界面 zaihecanshu 表格第二列（参数值），行结构由 fill_load_params_by_calc_type 决定。"""
+    if not dialog:
+        return
+    table = dialog.findChild(QTableWidget, "zaihecanshu")
+    if not table:
+        return
+    for row in range(table.rowCount()):
+        name_item = table.item(row, 0)
+        param_name = name_item.text().strip() if name_item and name_item.text() else ""
+        item = table.item(row, 1)
+        if item is None:
+            item = QTableWidgetItem()
+            item.setTextAlignment(Qt.AlignCenter)
+            table.setItem(row, 1, item)
+        if _is_fixed_zero_angle_param(param_name):
+            _set_fixed_zero_angle_cell_style(item)
+        else:
+            item.setText("")
+            item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable)
+            item.setBackground(QBrush(QColor(255, 255, 255)))
+
+
 """设置第二个tab页的justlike表格（参考引用）"""
 def setup_justlike_table(dialog: QDialog):
     """
     对第二个tab页的justlike表格进行设置：
-    - 只显示一行，不显示多余空白
+    - 只显示两行，不显示多余空白
     - 第一列显示"参考引用"，不可编辑
     - 第二列与radioButton联动，控制可编辑状态
     """
@@ -889,12 +1413,13 @@ def setup_justlike_table(dialog: QDialog):
         print("[设置justlike表格] 未找到justlike控件")
         return
 
-    # 设置表格只显示1行
-    table.setRowCount(1)
+    # 设置表格只显示2行
+    table.setRowCount(2)
     
     # 设置行高为40
     row_height = 40
     table.setRowHeight(0, row_height)
+    table.setRowHeight(1, row_height)
     
     # 设置垂直标题头为固定模式
     if table.verticalHeader():
@@ -903,7 +1428,7 @@ def setup_justlike_table(dialog: QDialog):
     # 禁用垂直滚动条
     table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
     
-    # 设置第一列（索引0）：显示"参考引用"，不可编辑、不可选中
+    # 设置第一列（索引0）：第1行显示"参考引用"，不可编辑、不可选中
     item_col0 = table.item(0, 0)
     if item_col0 is None:
         item_col0 = QTableWidgetItem("参考引用")
@@ -912,14 +1437,69 @@ def setup_justlike_table(dialog: QDialog):
         item_col0.setText("参考引用")
     item_col0.setFlags(item_col0.flags() & ~Qt.ItemIsEditable & ~Qt.ItemIsSelectable)
     #item_col0.setBackground(QBrush(QColor(240, 240, 240)))
+
+    # 设置第一列（索引0）：第2行显示"载荷作用位置"，不可编辑、不可选中
+    item_row1_col0 = table.item(1, 0)
+    if item_row1_col0 is None:
+        item_row1_col0 = QTableWidgetItem("载荷作用位置")
+        table.setItem(1, 0, item_row1_col0)
+    else:
+        item_row1_col0.setText("载荷作用位置")
+    item_row1_col0.setFlags(item_row1_col0.flags() & ~Qt.ItemIsEditable & ~Qt.ItemIsSelectable)
     
-    # 设置第二列（索引1）：初始不可编辑、不可选中，与radioButton联动
+    # 设置第二列（索引1）：第1行初始不可编辑、不可选中，与radioButton联动
     item_col1 = table.item(0, 1)
     if item_col1 is None:
         item_col1 = QTableWidgetItem()
         table.setItem(0, 1, item_col1)
     item_col1.setFlags(item_col1.flags() & ~Qt.ItemIsEditable & ~Qt.ItemIsSelectable)
     #item_col1.setBackground(QBrush(QColor(240, 240, 240)))
+
+    # 设置第二列（索引1）：第2行采用与管口定义一致风格的下拉框委托
+    load_position_options = ["载荷作用于接管根部", "载荷作用于接管顶部"]
+    load_position_delegate = LocalStressCalcTypeComboDelegate(
+        table, options=load_position_options, target_row=1, target_col=1
+    )
+    load_position_delegate.setParent(table)
+    table.setItemDelegateForRow(1, load_position_delegate)
+
+    # 第2行第2列默认值：载荷作用于接管顶部
+    item_row1_col1 = table.item(1, 1)
+    if item_row1_col1 is None:
+        item_row1_col1 = QTableWidgetItem("载荷作用于接管顶部")
+        table.setItem(1, 1, item_row1_col1)
+    else:
+        item_row1_col1.setText("载荷作用于接管顶部")
+    item_row1_col1.setTextAlignment(Qt.AlignCenter)
+    item_row1_col1.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable)
+
+    # 单击第2行第2列时直接展开下拉
+    def  on_justlike_cell_clicked(clicked_row, clicked_col):
+        if clicked_row == 1 and clicked_col == 1:
+            target_item = table.item(1, 1)
+            if target_item is None:
+                target_item = QTableWidgetItem("载荷作用于接管顶部")
+                target_item.setTextAlignment(Qt.AlignCenter)
+                target_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable)
+                table.setItem(1, 1, target_item)
+            table.editItem(target_item)
+        elif clicked_row == 0 and clicked_col == 1:
+            # 仅在“参考引用”被启用时允许下拉选择参考管口代号
+            if getattr(dialog, "_first_row_editable", False):
+                target_item = table.item(0, 1)
+                if target_item is None:
+                    target_item = QTableWidgetItem()
+                    target_item.setTextAlignment(Qt.AlignCenter)
+                    target_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable)
+                    table.setItem(0, 1, target_item)
+                table.editItem(target_item)
+
+    try:
+        table.cellClicked.disconnect(table._justlike_click_handler)
+    except Exception:
+        pass
+    table._justlike_click_handler = on_justlike_cell_clicked
+    table.cellClicked.connect(table._justlike_click_handler)
     
     # 设置列宽：第一列固定宽度360，第二列可以拉伸自适应
     table.setColumnWidth(0, 430)
@@ -932,8 +1512,8 @@ def setup_justlike_table(dialog: QDialog):
     # 禁止水平滚动条
     table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
     
-    # 设置表格固定高度，只显示一行
-    total_height = row_height + 2  # 行高 + 边框
+    # 设置表格固定高度，只显示两行
+    total_height = row_height * 2 + 2  # 两行行高 + 边框
     table.setFixedHeight(total_height)
     
     # 设置表格大小策略：高度固定，宽度可扩展
@@ -960,23 +1540,34 @@ def setup_second_tab_table(dialog: QDialog):
         print("[设置第二个tab页表格] 未找到zaihecanshu控件")
         return
 
-    # 获取行数
-    row_count = table.rowCount()
-    
-    # 设置初始行高为 40
-    initial_row_height = 40
-    
-    # 先设置一个基础行高（用于计算最小高度），实际显示时行高会自动拉伸
-    for r in range(row_count):
-        table.setRowHeight(r, initial_row_height)
-    
-    # 垂直标题头使用 Stretch 模式，让行高自动拉伸填充可用空间
-    # 这样当对话框放大时，行本身会被拉高，不会在表格底部出现一大块空白区域
-    if table.verticalHeader():
-        table.verticalHeader().setSectionResizeMode(QHeaderView.Stretch)
+    # 布局修正：去掉 justlike 与 zaihecanshu 之间的弹簧，避免表格被压到下方
+    parent_layout = dialog.findChild(QVBoxLayout, "verticalLayout_4")
+    if parent_layout:
+        i = 0
+        while i < parent_layout.count():
+            item = parent_layout.itemAt(i)
+            if item and item.spacerItem() is not None:
+                parent_layout.takeAt(i)
+                continue
+            i += 1
+        parent_layout.setSpacing(8)
+        parent_layout.setAlignment(Qt.AlignTop)
 
-    # 禁用垂直滚动条，确保只显示实际行数，不显示多余的空白行
+    # 第二列（参数值）统一限制为数值输入
+    table.setItemDelegateForColumn(1, NumericValueDelegate(table))
+
+    # 获取行数并固定每行高度（不拉伸）
+    row_count = table.rowCount()
+    fixed_row_height = 40
+    for r in range(row_count):
+        table.setRowHeight(r, fixed_row_height)
+    if table.verticalHeader():
+        table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+
+    # 高度随行数动态变化：有几行就显示几行
     table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    total_height = fixed_row_height * row_count + 2  # 行高总和 + 边框
+    table.setFixedHeight(total_height)
     
     # 现在zaihecanshu表从第一行开始就是参数行（参考引用已移到justlike表）
     for row in range(table.rowCount()):
@@ -1007,15 +1598,15 @@ def setup_second_tab_table(dialog: QDialog):
     # 禁止水平滚动条
     table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
     
-    # 设置表格大小策略：允许两个方向扩展
-    table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+    # 设置表格大小策略：宽度可扩展，高度固定为按行数计算后的高度
+    table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
     
     # 设置表格最小尺寸（宽度最小为两列最小宽度之和，高度为所有行高度之和）
     min_width = 360 + 135  # 第一列360 + 第二列最小135
-    min_height = initial_row_height * row_count + 2
+    min_height = total_height
     table.setMinimumSize(min_width, min_height)
-    # 不设置最大宽度，允许水平扩展（参考第一个tab页的实现）
-    table.setMaximumSize(16777215, 16777215)  # 16777215是Qt的最大整数值
+    # 不设置最大宽度，允许水平扩展；高度固定为当前行数对应高度
+    table.setMaximumSize(16777215, total_height)  # 16777215是Qt的最大整数值
 
 
 
@@ -1100,6 +1691,8 @@ def init_pipe_openingload_dialog(dialog: QDialog, pipe_code: str = None, product
     setup_justlike_table(dialog)
     #设置参数表格
     setup_second_tab_table(dialog)
+    # 初始化兜底：若 UI 设计时已预置了参数行，先应用一次“夹角=0、灰色、不可编辑”规则
+    clear_zaihecanshu_parameter_values(dialog)
 
     # # 注意：zaihecanshu表格的基础设置会在fill_load_params_by_calc_type之后进行
     # # 因为需要先填充数据才能知道表格需要多少行
@@ -1125,6 +1718,7 @@ def init_pipe_openingload_dialog(dialog: QDialog, pipe_code: str = None, product
 
     # 设置默认值变量
     default_value = "柱壳上圆形附件或接管计算(WRC 537)"
+    dialog._last_calc_type_value = default_value
 
     # 连接单元格点击信号，实现单击即可显示下拉框
     def on_cell_clicked(row, column):
@@ -1154,6 +1748,15 @@ def init_pipe_openingload_dialog(dialog: QDialog, pipe_code: str = None, product
             if item:
                 calc_type = item.text().strip()
                 if calc_type:
+                    prev_calc_type = getattr(dialog, "_last_calc_type_value", "")
+                    calc_type_switched = prev_calc_type != calc_type
+                    # 当局部应力计算类型发生切换时：清库（仅保留第一页两项）、载荷作用位置恢复默认
+                    if calc_type_switched:
+                        if product_id and pipe_id:
+                            clear_second_tab_params_in_db(product_id, pipe_id)
+                        reset_justlike_load_position_to_default(dialog)
+                    dialog._last_calc_type_value = calc_type
+
                     # 显示对应的载荷示意图（第一个tab页）
                     display_load_image(dialog, calc_type)
                     # 显示对应的载荷计算图（第二个tab页）
@@ -1162,6 +1765,11 @@ def init_pipe_openingload_dialog(dialog: QDialog, pipe_code: str = None, product
                     update_second_tab_name(dialog, calc_type)
                     # 填充对应的参数到第二个tab页表格第一列
                     fill_load_params_by_calc_type(dialog, calc_type)
+                    if calc_type_switched:
+                        clear_zaihecanshu_parameter_values(dialog)
+                    # 计算类型变化后，刷新“参考引用”可选管口代号
+                    if product_id and pipe_id:
+                        refresh_reference_pipe_dropdown(dialog, product_id, pipe_id)
                     # 切换类型时，将radioButton设为未选中（False），使第一行第二列默认禁用
                     # 直接设置，让信号正常触发，这样toggle函数会被调用，确保状态正确
                     radio_btn = dialog.findChild(QRadioButton, "justlike_btn")
@@ -1189,20 +1797,11 @@ def init_pipe_openingload_dialog(dialog: QDialog, pipe_code: str = None, product
                     # 显示默认值对应的载荷计算图（第二个tab页）
                     display_load_calc_image(dialog, default_value)
         
-        # 实现随输随存：当局部应力符号（第0行第1列）或局部应力计算类型（第1行第1列）改变时保存
+        # 第一页 yinglijisuan 随输随存：只写「局部应力符号」「局部应力计算类型」两行（与 1461-1465 一致）
         if (row == 0 and column == 1) or (row == 1 and column == 1):
-            if product_id and pipe_id and pipe_code:
-                # 获取局部应力符号（第0行第1列）
-                symbol_item = table.item(0, 1)
-                local_stress_symbol = symbol_item.text().strip() if symbol_item else ""
-                
-                # 获取局部应力计算类型（第1行第1列）
-                calc_type_item = table.item(1, 1)
-                local_stress_calc_type = calc_type_item.text().strip() if calc_type_item else ""
-                
-                # 保存到数据库
-                save_pipe_load_data_to_db(product_id, pipe_id, pipe_code, local_stress_symbol, local_stress_calc_type)
-    
+            if product_id and pipe_id:
+                save_pipe_load_data_by_table(product_id, pipe_id, pipe_code, table, rows=[0, 1])
+
     table.cellChanged.connect(on_cell_changed)
     
     # 从数据库加载已有数据（在连接cellChanged信号之后，先阻止信号触发，避免加载时触发保存）
@@ -1211,6 +1810,19 @@ def init_pipe_openingload_dialog(dialog: QDialog, pipe_code: str = None, product
         if product_id and pipe_id:
             loaded_data = load_pipe_load_data_from_db(product_id, pipe_id)
             if loaded_data:
+                # 回填“载荷作用位置”（justlike表第2行第2列）
+                justlike_table = dialog.findChild(QTableWidget, "justlike")
+                if justlike_table and justlike_table.rowCount() > 1:
+                    load_pos_item = justlike_table.item(1, 1)
+                    load_pos_text = loaded_data.get("载荷作用位置") or "载荷作用于接管顶部"
+                    if load_pos_item is None:
+                        load_pos_item = QTableWidgetItem(load_pos_text)
+                        load_pos_item.setTextAlignment(Qt.AlignCenter)
+                        load_pos_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable)
+                        justlike_table.setItem(1, 1, load_pos_item)
+                    else:
+                        load_pos_item.setText(load_pos_text)
+
                 # 如果数据库中有数据，优先使用数据库中的数据
                 # 设置局部应力符号（第0行第1列）
                 if loaded_data.get("局部应力符号"):
@@ -1253,7 +1865,7 @@ def init_pipe_openingload_dialog(dialog: QDialog, pipe_code: str = None, product
                     load_second_tab_params_from_db(dialog, product_id, pipe_id)
                     # 如果局部应力符号是刚设置的默认值，需要保存到数据库
                     if not loaded_data.get("局部应力符号") and current_symbol:
-                        save_pipe_load_data_to_db(product_id, pipe_id, pipe_code, current_symbol, loaded_data["局部应力计算类型"])
+                        save_pipe_load_data_by_table(product_id, pipe_id, pipe_code, table, rows=[0, 1])
                 else:
                     # 如果数据库中没有局部应力计算类型，使用默认值并保存到数据库
                     calc_type_item = table.item(1, 1)
@@ -1276,7 +1888,7 @@ def init_pipe_openingload_dialog(dialog: QDialog, pipe_code: str = None, product
                     load_second_tab_params_from_db(dialog, product_id, pipe_id)
                     # 保存默认值到数据库（如果之前没有记录，或者局部应力符号是默认值）
                     if current_symbol:
-                        save_pipe_load_data_to_db(product_id, pipe_id, pipe_code, current_symbol, default_value)
+                        save_pipe_load_data_by_table(product_id, pipe_id, pipe_code, table, rows=[0, 1])
             else:
                 # 如果数据库中没有数据，使用默认值并保存到数据库
                 # 根据管口代号设置局部应力符号的默认值
@@ -1308,7 +1920,19 @@ def init_pipe_openingload_dialog(dialog: QDialog, pipe_code: str = None, product
                 load_second_tab_params_from_db(dialog, product_id, pipe_id)
 
                 # 将默认值保存到数据库
-                save_pipe_load_data_to_db(product_id, pipe_id, pipe_code, local_stress_symbol, default_value)
+                save_pipe_load_data_by_table(product_id, pipe_id, pipe_code, table, rows=[0, 1])
+
+                justlike_table = dialog.findChild(QTableWidget, "justlike")
+                if justlike_table and justlike_table.rowCount() > 1:
+                    load_pos_item = justlike_table.item(1, 1)
+                    load_pos_text = "载荷作用于接管顶部"
+                    if load_pos_item is None:
+                        load_pos_item = QTableWidgetItem(load_pos_text)
+                        load_pos_item.setTextAlignment(Qt.AlignCenter)
+                        load_pos_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable)
+                        justlike_table.setItem(1, 1, load_pos_item)
+                    else:
+                        load_pos_item.setText(load_pos_text)
         else:
             # 如果product_id或pipe_id为空，使用默认值
             if pipe_code:
@@ -1330,9 +1954,16 @@ def init_pipe_openingload_dialog(dialog: QDialog, pipe_code: str = None, product
             update_second_tab_name(dialog, default_value)
             # 填充默认值对应的参数到第二个tab页表格第一列
             fill_load_params_by_calc_type(dialog, default_value)
+        # 与界面实际「局部应力计算类型」同步，避免切换时误判未变化而不清空第二界面
+        ct_item = table.item(1, 1)
+        dialog._last_calc_type_value = ct_item.text().strip() if ct_item and ct_item.text() else default_value
     finally:
         # 恢复信号连接
         table.blockSignals(False)
+
+    # 初始化（或刷新）“参考引用”下拉数据源
+    if product_id and pipe_id:
+        refresh_reference_pipe_dropdown(dialog, product_id, pipe_id)
     
     # 设置第一个tab页的引用功能：与radioButton联动，控制justlike表格第一行的可编辑状态
     # 获取radioButton和justlike表格
@@ -1362,6 +1993,8 @@ def init_pipe_openingload_dialog(dialog: QDialog, pipe_code: str = None, product
                     #item.setBackground(QBrush(QColor(255, 255, 255)))
                     # 第二列设为可编辑、可选中
                     if col == 1:
+                        if product_id and pipe_id:
+                            refresh_reference_pipe_dropdown(dialog, product_id, pipe_id)
                         item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable)
                     # 第一列始终保持不可编辑、不可选中
                     elif col == 0:
@@ -1372,6 +2005,7 @@ def init_pipe_openingload_dialog(dialog: QDialog, pipe_code: str = None, product
                     # 第二列设为不可编辑、不可选中
                     if col == 1:
                         item.setFlags(item.flags() & ~Qt.ItemIsEditable & ~Qt.ItemIsSelectable)
+                        item.setText("")
                     # 第一列始终保持不可编辑、不可选中
                     elif col == 0:
                         item.setFlags(item.flags() & ~Qt.ItemIsEditable & ~Qt.ItemIsSelectable)
@@ -1380,17 +2014,52 @@ def init_pipe_openingload_dialog(dialog: QDialog, pipe_code: str = None, product
         radio_btn.toggled.connect(toggle_first_row_editable)
         # 初始状态设为未选中（False），这会触发toggle函数，设置第一行为禁用状态
         radio_btn.setChecked(False)
+
+    # 参考引用代号改变时，自动按同计算类型的参考管口回填当前参数
+    if justlike_table:
+        def on_justlike_cell_changed(row, col):
+            if row != 0 or col != 1:
+                return
+            if not (product_id and pipe_id):
+                return
+            if not getattr(dialog, "_first_row_editable", False):
+                return
+            selected_item = justlike_table.item(0, 1)
+            selected_code = selected_item.text().strip() if selected_item and selected_item.text() else ""
+            if not selected_code:
+                return
+            ref_map = getattr(dialog, "_reference_pipe_id_map", {}) or {}
+            ref_pipe_id = ref_map.get(selected_code)
+            if not ref_pipe_id:
+                return
+            apply_reference_pipe_params(dialog, product_id, ref_pipe_id)
+
+        try:
+            justlike_table.cellChanged.disconnect(dialog._justlike_cell_changed_handler)
+        except Exception:
+            pass
+        dialog._justlike_cell_changed_handler = on_justlike_cell_changed
+        justlike_table.cellChanged.connect(dialog._justlike_cell_changed_handler)
     
-    # 连接确认按钮的点击事件，保存第二个tab页的数据
-    # save_btn = dialog.findChild(QPushButton, "save_btn")
-    # if save_btn:
-    #     def on_save_btn_clicked():
-    #         """确认按钮点击事件处理函数"""
-    #         if product_id and pipe_id:
-    #             save_second_tab_load_params_to_db(dialog, product_id, pipe_id)
-    #         else:
-    #             print("[保存第二个tab页载荷参数] 产品ID或管口ID为空，无法保存")
-    #
-    #     save_btn.clicked.connect(on_save_btn_clicked)
-    # else:
-    #     print("[初始化管口载荷弹窗] 未找到确认按钮 save_btn")
+    # 连接确认按钮的点击事件：统一保存第一tab、justlike和第二tab
+    save_btn = dialog.findChild(QPushButton, "save_btn")
+    if save_btn:
+        def on_save_btn_clicked():
+            """确认按钮点击事件处理函数"""
+            if product_id and pipe_id:
+                # 1) 保存第一个tab页（局部应力符号、局部应力计算类型）
+                save_pipe_load_data_by_table(product_id, pipe_id, pipe_code, table, rows=[0, 1])
+
+                # 2) 保存第一tab里的justlike表（载荷作用位置）
+                justlike_table = dialog.findChild(QTableWidget, "justlike")
+                if justlike_table:
+                    save_pipe_load_data_by_table(product_id, pipe_id, pipe_code, justlike_table, rows=[1])
+
+                # 3) 保存第二个tab页参数
+                save_second_tab_load_params_to_db(dialog, product_id, pipe_id)
+            else:
+                print("[保存第二个tab页载荷参数] 产品ID或管口ID为空，无法保存")
+
+        save_btn.clicked.connect(on_save_btn_clicked)
+    else:
+        print("[初始化管口载荷弹窗] 未找到确认按钮 save_btn")

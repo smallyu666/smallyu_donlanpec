@@ -3,7 +3,12 @@ from PyQt5.QtWidgets import QMessageBox, QLabel, QComboBox
 import pymysql
 import time
 from modules.guankoudingyi.db_cnt import get_connection, db_config_2,db_config_material
-from modules.guankoudingyi.funcs.funcs_pipe_table import ensure_hidden_maps, get_next_pipe_id_runtime
+from modules.guankoudingyi.funcs.funcs_pipe_table import (
+    ensure_hidden_maps,
+    get_next_pipe_id_runtime,
+    ensure_hidden_attachment_maps,
+    get_next_attachment_id_runtime,
+)
 
 
 def save_all_pipe_data(stats_widget):
@@ -139,6 +144,13 @@ def save_all_pipe_data(stats_widget):
                 ON DUPLICATE KEY UPDATE `管口代号`=VALUES(`管口代号`), `管口所属元件`=VALUES(`管口所属元件`)
             """, (product_id, hid, port_code, component))
 
+            # —— 2.3 同步更新 "产品设计活动表_管口载荷表" 的管口代号（按 产品ID+管口ID）
+            cur.execute("""
+                UPDATE 产品设计活动表_管口载荷表
+                SET 管口代号 = %s
+                WHERE 产品ID = %s AND 管口ID = %s
+            """, (port_code, product_id, hid))
+
         conn.commit()
 
         # —— 3) 保存管口附件数据 ——
@@ -162,6 +174,106 @@ def save_all_pipe_data(stats_widget):
             cur.close()
         if conn:
             conn.close()
+
+
+def save_all_attachment_define_data(stats_widget):
+    """
+    保存附件定义表（tableWidget_attachment）到 产品设计活动表_附件表。
+    策略对齐 save_all_pipe_data / 管口表：
+    - 第0行为表头；最后一行为空白占位行，不参与保存（与管口「排除最后空行」一致）
+    - 第0列为序号（不入库）；第1列「元件名称」为空则跳过该行
+    - 元件ID：运行期隐藏映射；若无则按 max(db, runtime)+1 分配
+    - 不重排/不修改已存在的 元件ID：删除仅删用户删除的 元件ID；新增则使用 max(db, runtime)+1 分配
+      （中间断号允许存在，保证 (产品ID, 元件ID) 作为唯一标识稳定不变）
+    - 暂不做校验/不写其他表
+    """
+    ensure_hidden_attachment_maps(stats_widget)
+    table = getattr(stats_widget, "tableWidget_attachment", None)
+    product_id = getattr(stats_widget, "product_id", None)
+    if not product_id or table is None:
+        return
+
+    # 附件表列映射（与 UI 表头一致）
+    column_map = {
+        1: "元件名称",
+        2: "元件类型",
+        3: "所属元件",
+        4: "轴向定位基准",
+        5: "轴向定位距离mm",
+        6: "数量",
+        7: "间距",
+        8: "轴向夹角（°）",
+        9: "周向方位（°）",
+        10: "偏心距",
+        11: "外伸高度",
+        12: "备注",
+    }
+
+    conn = None
+    cur = None
+    try:
+        conn = get_connection(**db_config_2)
+        cur = conn.cursor(pymysql.cursors.DictCursor)
+
+        # 1) 处理延迟删除（仅删除用户实际删除的旧ID；不改动其他记录的 元件ID）
+        deleted_ids = list(getattr(stats_widget, "deleted_attachment_ids", set()))
+        for elem_id in deleted_ids:
+            cur.execute("""
+                DELETE FROM 产品设计活动表_附件表
+                WHERE 产品ID=%s AND 元件ID=%s
+            """, (product_id, elem_id))
+        if hasattr(stats_widget, "deleted_attachment_ids"):
+            stats_widget.deleted_attachment_ids.clear()
+
+        # 2) 与管口相同：最后一行空白占位不保存；第0行为表头
+        last_blank_row = table.rowCount() - 1
+        for row in range(1, max(1, last_blank_row)):
+            name_item = table.item(row, 1)
+            elem_name = name_item.text().strip() if name_item else ""
+            if not elem_name:
+                continue
+
+            elem_id = getattr(stats_widget, "row_hidden_attachment_id", {}).get(row)
+            if not elem_id:
+                elem_id = get_next_attachment_id_runtime(stats_widget, product_id)
+                stats_widget.row_hidden_attachment_id[row] = elem_id
+
+            row_data = {}
+            for col, field in column_map.items():
+                it = table.item(row, col)
+                txt = it.text().strip() if it else ""
+                row_data[field] = txt if txt != "" else None
+
+            fields = ["元件ID", "产品ID"] + list(row_data.keys())
+            placeholders = ", ".join(["%s"] * len(fields))
+            values = [elem_id, product_id] + list(row_data.values())
+            set_clause = ", ".join([f"`{k}`=VALUES(`{k}`)" for k in row_data.keys()])
+
+            sql = f"""
+                INSERT INTO 产品设计活动表_附件表 (`{'`, `'.join(fields)}`)
+                VALUES ({placeholders})
+                ON DUPLICATE KEY UPDATE {set_clause}
+            """
+            cur.execute(sql, values)
+
+        conn.commit()
+
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        # 不做强校验，仅提示保存失败原因
+        QMessageBox.critical(stats_widget, "保存失败", f"保存附件定义数据时出错：{str(e)}")
+    finally:
+        if cur:
+            try:
+                cur.close()
+            except Exception:
+                pass
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def get_type_selections_from_table_header(stats_widget):
@@ -255,6 +367,8 @@ def save_all_data_combined(stats_widget):
     if save_pipe_type_selection(stats_widget):
         # 再保存管口数据
         save_all_pipe_data(stats_widget)
+        # 再保存附件定义数据
+        save_all_attachment_define_data(stats_widget)
 
 def save_pipe_attachment_data(product_id, conn, cur):
     """
