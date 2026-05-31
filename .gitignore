@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *.so
+*.pyc
 .pytest_cache/
 .coverage
 htmlcov/
