@@ -275,9 +275,9 @@ def check_work_pressure(value, tip_widget, param_name, column_name, table_widget
     for name, dp in dp_list:
         if wp > 0 and dp > 0:
             if wp >= dp:
-                return "error", f"{name} 不应低于工作压力，请核对后输入"
-            elif dp / wp > 1.2:
-                return "warn", f"{name} 高于工作压力的幅度较大，请确认"
+                return "error", f"{name} 应大于工作压力。"
+            elif dp / wp > 1.1:
+                return "warn", f"{name} 相对工作压力的裕度较大。"
         elif wp < 0 and dp < 0:
             if abs(wp) >= abs(dp):
                 return "error", f"{name} 和工作压力均为负压，{name} 应低于工作压力，请核对后输入"
@@ -663,15 +663,16 @@ def check_design_pressure(value, tip_widget, param_name, column_name, table_widg
     """
     校验“设计压力*”：
     - 类型 float；
-    - 范围 0.1≤ ≤ 35 且不在 (-0.02, 0.1)；
+    - 范围 [-0.1, -0.02] U [0.1, 100]；
     - 联动：工作压力、公称直径、自定义耐压试验压力（卧/立）+ 耐压试验类型
-    - 返回值：(等级, 提示语) → error / warn / ok
-    1）低于0.1MPa，提示：建议按常压容器标准设计。
-    2）高于35MPa,提醒：设计压力超过规则设计标准界限！不合规。
-    3）高于100MPa，提醒：设计压力超过分析设计标准界限！不合规。
-    4）低于工作压力，提醒：设计压力应当不低于工作压力。
-    5）等于工作压力时，提示：设计压力应当不低于工作压力。
-    6）高于工作压力超过1.1倍时，提示：设计压力相对于工作压力的裕度较大。
+    1）当P<-0.1MPa时，提醒：设计压力不能小于-0.1MPa！不合规。数据清空。
+    2）当-0.02MPa<P<0.1MPa时，提醒：建议按照常压容器设计。数据清空。
+    3）当P=0时，提醒：设计压力不能为0MPa！不合规。数据清空。
+    4）当35MPa＜P≤100MPa时，提醒：设计压力超过规则设计标准界限！不合规。数据不清空。
+    5）当P>100MPa时，提醒：设计压力超过分析设计标准界限！不合规。数据清空。
+    6）当P≤工作压力时，提醒：设计压力应大于工作压力。数据清空。
+    7）当P＞1.1倍的工作压力时，提示：设计压力相对工作压力的裕度较大。数据不清空。
+    8）当产品类型为“管壳式热交换器”时：P*DN>4.05x10^4时，提醒：设计压力（MPa）与公称直径（DN）的乘积＞4.05x10^4，不合规。数据清空。
     """
     if value.strip() == "":
         return "ok", ""
@@ -680,58 +681,61 @@ def check_design_pressure(value, tip_widget, param_name, column_name, table_widg
     except:
         return "error", "输入数据类型有误，请确认后输入"
 
-    if dp == 0:
-        return "warn", "设计压力不能为0！不合规。"
-    # 1）低于0.1MPa，提示（warn）
-    if dp < 0.1 and dp > -0.02:
-        return "warn", "建议按常压容器标准设计。"
-    # 2）高于35MPa但不超过100MPa，提醒（warn）
-    if 35 < dp <= 100:
-        return "warn", "设计压力超过规则设计标准界限！不合规。"
-    # 3）高于100MPa，提醒（warn）
-    if dp > 100:
-        return "warn", "设计压力超过分析设计标准界限！不合规。"
-
-    if not table_widget:
-        return "ok", ""
-
     wp = dn = None
     trial_pressure_lying = trial_pressure_stand = trial_type = None
 
-    for row in range(table_widget.rowCount()):
-        name = get_param_name(table_widget, row)
-        if not name:
-            continue
+    if table_widget:
+        for row in range(table_widget.rowCount()):
+            name = get_param_name(table_widget, row)
+            if not name:
+                continue
 
-        val_item = table_widget.item(row, col_index)
-        if not val_item or not val_item.text().strip():
-            continue
-        text = val_item.text().strip()
-        try:
-            if name == "工作压力":
-                wp = float(text)
-            elif name == "公称直径*":
-                dn = int(text)
-            elif name == "自定义耐压试验压力（卧）":
-                trial_pressure_lying = float(text)
-            elif name == "自定义耐压试验压力（立）":
-                trial_pressure_stand = float(text)
-            elif name == "耐压试验类型":
-                trial_type = text
-        except:
-            continue
+            val_item = table_widget.item(row, col_index)
+            if not val_item or not val_item.text().strip():
+                continue
+            text = val_item.text().strip()
+            try:
+                if name == "工作压力":
+                    wp = float(text)
+                elif name == "公称直径*":
+                    dn = int(text)
+                elif name == "自定义耐压试验压力（卧）":
+                    trial_pressure_lying = float(text)
+                elif name == "自定义耐压试验压力（立）":
+                    trial_pressure_stand = float(text)
+                elif name == "耐压试验类型":
+                    trial_type = text
+            except:
+                continue
 
-    # 处理与工作压力的关系
-    if wp is not None:
-    # 4 5) 小于等于工作压力
-        if dp <= wp:
-            return "warn", "设计压力应当不低于工作压力。"
-        # 6）高于工作压力1.1倍
-        elif abs(wp) > 0 and dp / wp > 1.1:
-            return "warn", "设计压力相对于工作压力的裕度较大。"
+    # 1. 先判断所有必须“清空数据”的硬性错误 (Error)
+    if dp < -0.1:
+        return "error", "设计压力不能小于-0.1MPa！不合规。"
+    if dp == 0:
+        return "error", "设计压力不能为0！不合规。"
+    if -0.02 < dp < 0.1:
+        return "error", "建议按照常压容器设计。"
+    if dp > 100:
+        return "error", "设计压力超过分析设计标准界限！不合规。"
 
-    if dn is not None and dp * dn > 27000:
-        return "error", "设计压力与公称直径的乘积超过GB/T 151-2014的适用范围，请核对后输入"
+    if wp is not None and dp <= wp:
+        return "error", "设计压力应大于工作压力。"
+
+    if dn is not None and table_widget:
+        raw_product_form = _get_raw_product_form_from_product_db(table_widget)
+        if raw_product_form:
+            raw_form = raw_product_form.strip().upper()
+            gx_types = {"AEU", "BEU", "AES", "BES", "AKU", "BKU", "AEM", "BEM", "NEN"}
+            if raw_form in gx_types:
+                if dp * dn > 40500:
+                    return "error", "设计压力（MPa）与公称直径（DN）的乘积＞4.05x10^4，不合规。"
+
+    # 2. 再判断仅“提醒但不清空数据”的警告 (Warn)
+    if 35 < dp <= 100:
+        return "warn", "设计压力超过规则设计标准界限！不合规。"
+
+    if wp is not None and abs(wp) > 0 and dp / wp > 1.1:
+        return "warn", "设计压力相对工作压力的裕度较大。"
 
     def check_trial_pressure(val):
         if val is None or trial_type is None:
