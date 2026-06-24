@@ -278,14 +278,14 @@ def check_work_pressure(value, tip_widget, param_name, column_name, table_widget
     for name, dp in dp_list:
         if wp > 0 and dp > 0:
             if wp >= dp:
-                return "error", f"{name} 应大于工作压力。"
+                return "error", "设计压力应大于工作压力。"
             elif dp / wp > 1.1:
-                return "warn", f"{name} 相对工作压力的裕度较大。"
+                return "warn", "设计压力相对工作压力的裕度较大。"
         elif wp < 0 and dp < 0:
             if abs(wp) >= abs(dp):
-                return "error", f"{name} 和工作压力均为负压，{name} 应低于工作压力，请核对后输入"
+                return "error", "设计压力和工作压力均为负压，设计压力应低于工作压力，请核对后输入"
         elif wp * dp < 0:
-            return "error", f"{name} 和工作压力必须同正压或同负压，如需校核一正压一负压，请使用多工况模式"
+            return "error", "设计压力和工作压力必须同正压或同负压，如需校核一正压一负压，请使用多工况模式"
 
     if diff_val is not None:
         if wp < diff_val:
@@ -715,7 +715,7 @@ def check_design_pressure(value, tip_widget, param_name, column_name, table_widg
     if dp < -0.1:
         return "error", "设计压力不能小于-0.1MPa！不合规。"
     if dp == 0:
-        return "error", "设计压力不能为0！不合规。"
+        return "error", "设计压力不能为0MPa！不合规。"
     if -0.02 < dp < 0.1:
         return "error", "建议按照常压容器设计。"
     if dp > 100:
