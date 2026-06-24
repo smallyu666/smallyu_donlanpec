@@ -208,14 +208,17 @@ def check_dn(value, tip_widget, param_name, column_name, table_widget, col_index
                         pass
                 break
 
+        raw_product_form = _get_raw_product_form_from_product_db(table_widget)
+        raw_form = raw_product_form.strip().upper() if raw_product_form else ""
+        gx_types = {"AEU", "BEU", "AES", "BES", "AKU", "BKU", "AEM", "BEM", "NEN"}
+
         if dp_val is not None:
-            if dn_val * dp_val > 27000:
-                return "error", "公称直径与设计压力乘积超过GB/T 151-2014的适用范围，请核对后输入"
+            if raw_form in gx_types and dn_val * dp_val > 40500:
+                return "error", "设计压力（MPa）与公称直径（DN）的乘积＞4.05x10^4，不合规。"
 
         # AKU/BKU 特殊规则：
         # 仅当壳/管都已填写时，要求互不相等，且壳程 > 管程
-        raw_product_form = _get_raw_product_form_from_product_db(table_widget)
-        if raw_product_form in ("AKU", "BKU"):
+        if raw_form in ("AKU", "BKU"):
             if dn_shell is not None and dn_tube is not None:
                 if dn_shell == dn_tube:
                     return "error", "AKU/BKU产品公称直径要求壳程与管程数值不同，请核对后输入"
@@ -224,7 +227,7 @@ def check_dn(value, tip_widget, param_name, column_name, table_widget, col_index
 
         if dn_shell is not None and dn_tube is not None:
             # AKU/BKU 已有专属规则，不再提示“壳管不一致请确认”
-            if raw_product_form not in ("AKU", "BKU") and dn_shell != dn_tube:
+            if raw_form not in ("AKU", "BKU") and dn_shell != dn_tube:
                 return "warn", "管、壳程公称直径不一致，请确认"
 
     return "ok", ""
