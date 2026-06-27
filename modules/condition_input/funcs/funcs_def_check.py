@@ -210,7 +210,7 @@ def check_dn(value, tip_widget, param_name, column_name, table_widget, col_index
 
         raw_product_form = _get_raw_product_form_from_product_db(table_widget)
         raw_form = raw_product_form.strip().upper() if raw_product_form else ""
-        gx_types = {"AEU", "BEU", "AES", "BES", "AKU", "BKU", "AEM", "BEM", "NEN"}
+        gx_types = {"AEU", "BEU", "AES", "BES", "AKU", "BKU", "AEM", "BEM", "NEN", "NEN(HEAD)"}
 
         if dp_val is not None:
             if raw_form in gx_types and dn_val * dp_val > 40500:
@@ -728,7 +728,7 @@ def check_design_pressure(value, tip_widget, param_name, column_name, table_widg
         raw_product_form = _get_raw_product_form_from_product_db(table_widget)
         if raw_product_form:
             raw_form = raw_product_form.strip().upper()
-            gx_types = {"AEU", "BEU", "AES", "BES", "AKU", "BKU", "AEM", "BEM", "NEN"}
+            gx_types = {"AEU", "BEU", "AES", "BES", "AKU", "BKU", "AEM", "BEM", "NEN", "NEN(HEAD)"}
             if raw_form in gx_types:
                 if dp * dn > 40500:
                     return "error", "设计压力（MPa）与公称直径（DN）的乘积＞4.05x10^4，不合规。"
@@ -829,7 +829,7 @@ def check_design_temp_max(value, tip_widget, param_name, column_name, table_widg
     except Exception:
         raw_form = ""
 
-    if raw_form in {"nen", "bem", "aem","NEN(Head)"}:
+    if raw_form in {"nen", "bem", "aem", "nen(head)"}:
         avg_tube_metal_temp = None
         avg_shell_metal_temp = None
         for row in range(table_widget.rowCount()):
