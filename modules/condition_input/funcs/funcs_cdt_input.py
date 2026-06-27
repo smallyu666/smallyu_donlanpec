@@ -979,9 +979,9 @@ def apply_mode_param_order(table_widget, target_id_seq):
 
     new_rows = []
 
-    # ✅ 第一步：按照 target_id_seq 的顺序，收集所有表格中实际存在的必填项（带*）
+    # ✅ 第一步：严格按照 target_id_seq 的顺序，收集所有表格中实际存在的参数（不论是否必填）
     for pid in target_id_seq:
-        if pid in id2rows and id_to_required.get(pid, False):
+        if pid in id2rows:
             new_rows.append(id2rows[pid])
             id2rows.pop(pid)  # 从字典中移除，标记为已处理
 
@@ -1128,29 +1128,55 @@ def load_design_data_if_exists(product_id, product_form="all"):
                 params = []
 
                 if design_data_exists:  # 从设计活动库加载
-                    # cursor.execute(f"SELECT {field_str} FROM {table_name} WHERE 产品ID = %s", (product_id,))
                     sql_query += " WHERE `产品ID` = %s"
                     params.append(product_id)
-                else:  # 从模板库加载 用产品形式过滤
-                    # ▼▼▼【核心修改点 2】: 从模板库加载时，应用产品形式过滤 ▼▼▼
-                    # 检查是否是受影响的表，并且模板表里真的有所属型式 列
-                    is_form_dependent_table = key in ["设计数据"]  # 只影响设计数据表
+                else:  # 从模板库加载
+                    # 1) 获取当前产品类型
+                    current_product_type = "all"
+                    try:
+                        conn_p = get_connection(**db_config_3)
+                        with conn_p.cursor() as cur_p:
+                            cur_p.execute("SELECT 产品类型 FROM 产品需求表 WHERE 产品ID = %s", (product_id,))
+                            pt_row = cur_p.fetchone()
+                            if pt_row:
+                                current_product_type = pt_row.get("产品类型", "all").strip()
+                        conn_p.close()
+                    except Exception as e_pt:
+                        print(f"获取产品类型失败: {e_pt}")
+
+                    # 2) 组装过滤条件
+                    where_clauses = []
+                    
+                    # 过滤: 所属类型
+                    type_column_name = '所属类型'
+                    has_type_column = any(col['Field'] == type_column_name for col in columns)
+                    if has_type_column and current_product_type and current_product_type != "all":
+                        # 兼容 NULL 或空，但最好要求数据库里明确写出类型
+                        # FIND_IN_SET 允许数据库中填入 "管壳式热交换器,立式容器" 这样的逗号分隔值
+                        where_clauses.append(f"(`{type_column_name}` = %s OR FIND_IN_SET(%s, `{type_column_name}`) OR FIND_IN_SET('all', `{type_column_name}`) OR `{type_column_name}` IS NULL OR `{type_column_name}` = '')")
+                        params.extend([current_product_type, current_product_type])
+
+                    # 过滤: 所属型式 (只对特定的表，例如设计数据表)
+                    is_form_dependent_table = key in ["设计数据"]
                     form_column_name = '所属型式'
                     has_form_column = any(col['Field'] == form_column_name for col in columns)
-
                     if is_form_dependent_table and has_form_column:
                         # 1216新修改-bem也显示两个金属温度的参数
                         # 2026-01: AEM或后续的产品型式需要显示（直接在数据库表里加上产品型式）
                         # 用 FIND_IN_SET 做“精确匹配”，避免 LIKE 子串误命中。
                         if product_form and product_form != "all":
-                            sql_query += (
-                                f" WHERE `{form_column_name}` = %s"
-                                f" OR FIND_IN_SET(%s, `{form_column_name}`)"
+                            # FIND_IN_SET 第二个参数须为当前产品型式，才能匹配 "NEN,AEM,BEM,NEN(Head)" 这类逗号分隔值
+                            where_clauses.append(
+                                f"(`{form_column_name}` = %s OR FIND_IN_SET(%s, `{form_column_name}`) "
+                                f"OR FIND_IN_SET('all', `{form_column_name}`) OR `{form_column_name}` IS NULL OR `{form_column_name}` = '')"
                             )
-                            params.extend(['all', product_form])
+                            params.extend([product_form, product_form])
                         else:
-                            sql_query += f" WHERE `{form_column_name}` = %s"
+                            where_clauses.append(f"`{form_column_name}` = %s")
                             params.append('all')
+                            
+                    if where_clauses:
+                        sql_query += " WHERE " + " AND ".join(where_clauses)
                     # cursor.execute(f"SELECT {field_str} FROM {table_name} WHERE 所属形式 = %s",(product_form,))
                 # ▼▼▼【诊断点 2】: 打印最终要执行的 SQL 和参数 (最关键！) ▼▼▼
                 print(f"[SQL诊断] 最终执行的查询语句:\n    {sql_query}")
