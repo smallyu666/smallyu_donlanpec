@@ -253,6 +253,7 @@ class cpgl_Stats(QtWidgets.QWidget):
         bianl.product_type_combo.currentTextChanged.connect(main.load_product_forms)
         # lxy101
         bianl.product_type_combo.currentTextChanged.connect(main.on_product_type_changed)
+        bianl.product_form_combo.currentTextChanged.connect(main.on_product_form_changed)
 
         # 设计阶段 下拉框  改88
         # bianl.design_stage_combo.showPopup = main.wrap_show_popup(bianl.design_stage_combo.showPopup,

@@ -1574,27 +1574,39 @@ def load_product_forms():
 #         except: pass
 
 
-# lxy101=== 新增函数：用于处理产品类型变化的提示 ===
-def on_product_type_changed(text):
-    """当产品类型下拉框内容改变时，更新提示信息"""
-    developing_types = ["立式容器", "卧式容器"]
+# lxy101=== 容器产品定义：开发中判定与提示 ===
+def _is_container_definition_developing(product_type: str, product_form: str = "") -> bool:
+    """立式容器整类开发中；卧式容器仅双腔型开发中。"""
+    product_type = (product_type or "").strip()
+    product_form = (product_form or "").strip()
+    if product_type == "立式容器":
+        return True
+    if product_type == "卧式容器" and product_form == "双腔型":
+        return True
+    return False
 
-    # 检查当前选中的文本是否在“开发中”列表里
-    if text in developing_types:
-        # 如果是，就显示橙色警告提示
+
+def update_container_developing_tip():
+    """根据当前类型+型式更新底部「开发中」提示。"""
+    product_type = bianl.product_type_combo.currentText().strip()
+    product_form = bianl.product_form_combo.currentText().strip()
+    if _is_container_definition_developing(product_type, product_form):
         bianl.main_window.line_tip.setText("该容器正在开发中！")
         bianl.main_window.line_tip.setToolTip("该容器正在开发中！")
         bianl.main_window.line_tip.setStyleSheet("color: black;")
-        # # 5秒后自动清除提示1014
-        # QTimer.singleShot(5000, clear_line_tip)
-    else:
-        # 如果不是，就清空这条特定的警告信息
-        # （这里加一个判断，避免清除其他正常提示）
-        if bianl.main_window.line_tip.text() == "该容器正在开发中！":
-            bianl.main_window.line_tip.clear()
-            bianl.main_window.line_tip.setStyleSheet("color: black;")
-            # # 5秒后自动清除提示1014
-            # QTimer.singleShot(5000, clear_line_tip)
+    elif bianl.main_window.line_tip.text() == "该容器正在开发中！":
+        bianl.main_window.line_tip.clear()
+        bianl.main_window.line_tip.setStyleSheet("color: black;")
+
+
+def on_product_type_changed(text):
+    """当产品类型下拉框内容改变时，更新提示信息"""
+    update_container_developing_tip()
+
+
+def on_product_form_changed(text):
+    """当产品型式下拉框内容改变时，更新提示信息"""
+    update_container_developing_tip()
 
 
 def confirm_product_definition():
@@ -1624,9 +1636,17 @@ def confirm_product_definition():
         f"读取的产品信息：产品类型: {product_type}, 产品形式: {product_form},  产品型号: {product_model}, 图号前缀: {drawing_prefix}")
 
     # lxy101=== 在这里添加保存前的最终校验 ===
-    developing_types = ["立式容器", "卧式容器"]
-    if product_type in developing_types:
-        QMessageBox.critical(bianl.main_window, "无法保存", f"产品类型 '{product_type}' 尚在开发中，无法进行产品定义。")
+    if _is_container_definition_developing(product_type, product_form):
+        if product_type == "立式容器":
+            QMessageBox.critical(
+                bianl.main_window, "无法保存",
+                f"产品类型 '{product_type}' 尚在开发中，无法进行产品定义。"
+            )
+        else:
+            QMessageBox.critical(
+                bianl.main_window, "无法保存",
+                f"产品类型 '{product_type}' 与产品型式 '{product_form}' 尚在开发中，无法进行产品定义。"
+            )
         return False
 
     # 3) 以数据库为准判定是否“首次保存”
@@ -1760,6 +1780,20 @@ def confirm_product_definition():
         print(f"第 {row} 行定义状态已更新: view（保存成功）")
 
         if is_first_time:
+            # 如果是容器类型，则用容器专属的条件输入模板覆盖默认模板
+            if product_type in ["容器", "立式容器", "卧式容器"] and product_folder_abs and os.path.exists(product_folder_abs):
+                try:
+                    import shutil
+                    container_template_path = os.path.join(os.path.dirname(__file__), "容器条件输入数据表.xlsx")
+                    target_xlsx_path = os.path.join(product_folder_abs, "条件输入数据表.xlsx")
+                    if os.path.exists(container_template_path):
+                        shutil.copy(container_template_path, target_xlsx_path)
+                        print(f"[confirm_product_definition] 已用容器模板覆盖: {target_xlsx_path}")
+                    else:
+                        print(f"[confirm_product_definition] 未找到容器模板文件: {container_template_path}")
+                except Exception as e_copy:
+                    print(f"[confirm_product_definition] 覆盖容器模板失败: {e_copy}")
+
             # 只有首次需要把必填项锁死（类型/形式）
             lock_combo(bianl.product_type_combo)
             lock_combo(bianl.product_form_combo)
@@ -2970,7 +3004,7 @@ def load_last_project():
 
                     bianl.product_type_combo.setCurrentText(first_product.get("产品类型", "") or "")
                     bianl.product_form_combo.setCurrentText(first_product.get("产品型式", "") or "")
-                    bianl.product_model_input.setText(first_product.get("设计版次", "") or "")
+                    bianl.product_model_input.setText(first_product.get("产品型号", "") or "")
                     bianl.drawing_prefix_input.setText(first_product.get("图号前缀", "") or "")
 
                     bianl.design_input.setText(first_product.get("设计", "") or "")
