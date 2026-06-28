@@ -126,12 +126,13 @@ class MultiConditionsDialog(QDialog):
         for r, pname in enumerate(self.PARAM_NAMES):
             kc_val, gc_val = data_map.get(pname, ("", ""))
             kc_item = QTableWidgetItem(str(kc_val))
-            kc_item.setTextAlignment(Qt.AlignCenter)  # 设置居zhong
+            kc_item.setTextAlignment(Qt.AlignCenter)  # 设置居中
             self.tableWidget.setItem(r, 1, kc_item)
 
-            gc_item = QTableWidgetItem(str(gc_val))
-            gc_item.setTextAlignment(Qt.AlignCenter)  # 设置居中
-            self.tableWidget.setItem(r, 2, gc_item)
+            if not getattr(self, "is_container", False):
+                gc_item = QTableWidgetItem(str(gc_val))
+                gc_item.setTextAlignment(Qt.AlignCenter)  # 设置居中
+                self.tableWidget.setItem(r, 2, gc_item)
 
             # self.tableWidget.setItem(r, 2, QTableWidgetItem(self.PARAM_UNITS[r]))
             # 获取参数单位列（0列）的单元格
@@ -149,6 +150,30 @@ class MultiConditionsDialog(QDialog):
         self._multi_id_base = None
         self._multi_id_safe_threshold = 0
         self._multi_id_legacy_high = False
+
+        # --- 新增：容器模式判定与参数动态切换 ---
+        self.is_container = False
+        if parent and hasattr(parent, 'product_type') and parent.product_type and "容器" in parent.product_type:
+            self.is_container = True
+        elif parent and hasattr(parent, 'tableWidget_design_data'):
+            try:
+                for r in range(parent.tableWidget_design_data.rowCount()):
+                    it = parent.tableWidget_design_data.item(r, 0)
+                    if it and it.text().strip().isdigit() and int(it.text().strip()) >= 35:
+                        self.is_container = True
+                        break
+            except Exception:
+                pass
+        
+        if self.is_container:
+            self.PARAM_NAMES = [
+                "设计压力*",
+                "设计温度（最高）*",
+                "工作压力",
+                "最高（低）工作温度",
+                "最高允许工作压力"
+            ]
+            self.PARAM_UNITS = ["MPa", "℃", "MPa", "℃", "MPa"]
 
         # 加载 UI
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -173,8 +198,17 @@ class MultiConditionsDialog(QDialog):
 
         # 初始化表格
         self.tableWidget.setRowCount(len(self.PARAM_NAMES))
-        self.tableWidget.setColumnCount(3)
-        self.tableWidget.setHorizontalHeaderLabels(["参数单位","壳程数值", "管程数值"])
+        if self.is_container:
+            self.tableWidget.setColumnCount(2)
+            self.tableWidget.setHorizontalHeaderLabels(["参数单位", "数值"])
+            # 强制覆盖 .ui 里残留的换热器单位
+            for r, unit in enumerate(self.PARAM_UNITS):
+                unit_item = QTableWidgetItem(unit)
+                unit_item.setTextAlignment(Qt.AlignCenter)
+                self.tableWidget.setItem(r, 0, unit_item)
+        else:
+            self.tableWidget.setColumnCount(3)
+            self.tableWidget.setHorizontalHeaderLabels(["参数单位", "壳程数值", "管程数值"])
 
         # 0522新修改
         apply_table_style(self.tableWidget, keep_vertical_header=True)
@@ -191,13 +225,13 @@ class MultiConditionsDialog(QDialog):
         )
 
         # 0522新修改
-        self.tableWidget.verticalHeader().setDefaultAlignment(Qt.AlignCenter)
+        self.tableWidget.verticalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         normal_font = QFont(self.tableWidget.font())
         normal_font.setBold(False)
         for r, name in enumerate(self.PARAM_NAMES):
             name_item = QTableWidgetItem(name)
             name_item.setFont(normal_font)
-            name_item.setTextAlignment(Qt.AlignCenter)
+            name_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             self.tableWidget.setVerticalHeaderItem(r, name_item)
             for c in range(self.tableWidget.columnCount()):
                 cell = self.tableWidget.item(r, c)
@@ -395,7 +429,7 @@ class MultiConditionsDialog(QDialog):
                     multi_max = int(r2.get("max_id") or 0)
 
                     # 模板最大ID（按产品型式：NEN/AEM/BEM 额外包含 'NEN,AEM,BEM' 行；其余仅'all'）
-                    if product_form in ("NEN", "AEM", "BEM","NEN(Head)"):
+                    if product_form in ("NEN", "AEM", "BEM", "NEN(Head)", "单腔型", "双腔型"):
                         cur.execute(
                             """
                             SELECT MAX(设计数据参数ID) AS max_id
@@ -476,10 +510,11 @@ class MultiConditionsDialog(QDialog):
                     for row in range(table.rowCount()):
                         name_item = table.item(row, 1)  # 第1列: 参数名称
                         if name_item and name_item.text().strip() == pname:
-                            kc_item = table.item(row, 3)  # 第2列: 壳程数值
-                            gc_item = table.item(row, 4)  # 第3列: 管程数值
+                            kc_item = table.item(row, 3)  # 第3列: 壳程数值/数值
                             val_kc = kc_item.text() if kc_item else ""
-                            val_gc = gc_item.text() if gc_item else ""
+                            if not getattr(self, "is_container", False):
+                                gc_item = table.item(row, 4)  # 第4列: 管程数值
+                                val_gc = gc_item.text() if gc_item else ""
                             break
                     data_map[pname] = (val_kc, val_gc)
         else:
@@ -540,9 +575,10 @@ class MultiConditionsDialog(QDialog):
                             item_kc.setTextAlignment(Qt.AlignCenter)
                             table.setItem(row, 3, item_kc)
 
-                            item_gc = QTableWidgetItem(gc_val)
-                            item_gc.setTextAlignment(Qt.AlignCenter)
-                            table.setItem(row, 4, item_gc)
+                            if not getattr(self, "is_container", False):
+                                item_gc = QTableWidgetItem(gc_val)
+                                item_gc.setTextAlignment(Qt.AlignCenter)
+                                table.setItem(row, 4, item_gc)
             QMessageBox.information(self, "保存成功", f"工况{gongkuang_no} 已保存")
             return
 
@@ -629,9 +665,10 @@ class MultiConditionsDialog(QDialog):
                             item_kc.setTextAlignment(Qt.AlignCenter)
                             table.setItem(row, 3, item_kc)
 
-                            item_gc = QTableWidgetItem(gc_val)
-                            item_gc.setTextAlignment(Qt.AlignCenter)
-                            table.setItem(row, 4, item_gc)
+                            if not getattr(self, "is_container", False):
+                                item_gc = QTableWidgetItem(gc_val)
+                                item_gc.setTextAlignment(Qt.AlignCenter)
+                                table.setItem(row, 4, item_gc)
             return
 
         # 工况2/3：写数据库
@@ -723,11 +760,13 @@ class MultiConditionsDialog(QDialog):
         data_map = {}
         for r, pname in enumerate(self.PARAM_NAMES):
             kc_item = self.tableWidget.item(r, 1)
-            gc_item = self.tableWidget.item(r, 2)
+            gc_item = self.tableWidget.item(r, 2) if not getattr(self, "is_container", False) else None
 
             kc_val = kc_item.text().strip() if kc_item else ""
             gc_val = gc_item.text().strip() if gc_item else ""
             data_map[pname] = (kc_val, gc_val)
-            kc_item.setTextAlignment(Qt.AlignCenter)
-            gc_item.setTextAlignment(Qt.AlignCenter)
+            if kc_item:
+                kc_item.setTextAlignment(Qt.AlignCenter)
+            if gc_item:
+                gc_item.setTextAlignment(Qt.AlignCenter)
         self._data_cache[gongkuang_no] = data_map
