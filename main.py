@@ -584,6 +584,9 @@ def get_product_form_from_db(product_id: str) -> str:
                 # 如果是 NEN(Head)，就返回 NEN(Head)
                 print(f"    ↳ 逻辑转换: 保持为 'NEN(Head)'")
                 return 'NEN(Head)'
+            if raw_product_form in ['单腔型', '双腔型']:
+                print(f"    ↳ 逻辑转换: 保持为 '{raw_product_form}'")
+                return raw_product_form
             else:
                 # 如果是其他任何值 (AES, BES, NEN、NEN(Head)空值等)，都统一视为 'all'
                 print(f"    ↳ 逻辑转换: 将 '{raw_product_form}' 视为 'all'")
