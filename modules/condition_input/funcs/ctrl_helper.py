@@ -68,8 +68,9 @@ class UndoableItemDelegate(QStyledItemDelegate):
             if hasattr(self.table, "logical_headers"):
                 column_name = self.table.logical_headers[col]
             else:
-                header_item = self.table.horizontalHeaderItem(col)
-                column_name = header_item.text().strip() if header_item else ""
+                from modules.condition_input.funcs.funcs_cdt_input import resolve_header_field_name, normalize_design_column_name
+                column_name = resolve_header_field_name(self.table, col)
+                column_name = normalize_design_column_name(column_name)
 
             print(f"[校核DEBUG] row={row}, col={col}, param={param_name}, col_name={column_name}, value={value}")
 
