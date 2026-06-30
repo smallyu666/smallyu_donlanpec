@@ -30,6 +30,7 @@ from modules.chanpinguanli import bianl
 from modules.condition_input.funcs.undo_command import CellEditCommand
 from modules.condition_input.funcs.funcs_def_check import check_dn, check_work_pressure, check_work_temp_in, \
     check_work_temp_out, check_work_pressure_max, check_tubeplate_design_pressure_gap, \
+    check_max_min_work_temp, \
     check_design_pressure, check_design_temp_max, check_design_temp_min, \
     check_in_out_pressure_gap, check_trail_stand_pressure_medium_density, check_insulation_layer_thickness, \
     check_insulation_material_density, check_def_trail_stand_pressure_lying, check_def_trail_stand_pressure_stand, \
@@ -3322,6 +3323,8 @@ def validate_design_table_cell(param_name: str, column_name: str, value: str, li
             ("耐压试验类型*", "管程数值"): check_trail_stand_pressure_type,
             ("耐压试验温度", "壳程数值"): check_pressure_test_temp,
             ("耐压试验温度", "管程数值"): check_pressure_test_temp,
+            ("最高（低）工作温度", "壳程数值"): check_max_min_work_temp,
+            ("最高（低）工作温度", "管程数值"): check_max_min_work_temp,
             # ("沿长度平均的换热管金属温度*", "壳程数值"): check_avg_tube_metal_temp,
             ("沿长度平均的换热管金属温度*", "管程数值"): check_avg_tube_metal_temp,
             ("沿长度平均的壳程圆筒金属温度*", "壳程数值"): check_avg_shell_metal_temp

@@ -546,6 +546,56 @@ def check_work_temp_out(value, tip_widget, param_name, column_name, table_widget
 
     return "ok", ""
 
+def check_max_min_work_temp(value, tip_widget, param_name, column_name, table_widget, col_index) -> Tuple[str, str]:
+    if value.strip() == "":
+        return "ok", ""
+    try:
+        temp = float(value)
+    except:
+        return "error", "输入数据类型有误，请确认后输入"
+    
+    if temp < -269:
+        return "warn", "输入数值超出介质工作温度界限"
+    elif temp > 900:
+        return "warn", "超出过程装备材料允许使用温度界限"
+        
+    if not table_widget:
+        return "ok", ""
+
+    # 获取设计温度相关参数
+    design_temp = None
+    min_design_temp = None
+
+    for row in range(table_widget.rowCount()):
+        name = get_param_name(table_widget, row)
+        if not name:
+            continue
+
+        val_item = table_widget.item(row, col_index)
+        if not val_item or not val_item.text().strip():
+            continue
+        try:
+            val = float(val_item.text())
+        except:
+            continue
+        
+        if name == "设计温度（最高）*":
+            design_temp = val
+        elif name == "最低设计温度":
+            min_design_temp = val
+
+    if temp > 0:
+        if design_temp is not None:
+            if temp >= design_temp:
+                return "warn", "最高（低）工作温度超过设计温度（最高）*，请核对后输入"
+    elif temp < 0:
+        if min_design_temp is not None:
+            if temp <= min_design_temp:
+                return "warn", "最高（低）工作温度低于最低设计温度，请核对后输入"
+
+    return "ok", ""
+
+
 def check_work_pressure_max(value, tip_widget, param_name, column_name, table_widget, col_index) -> Tuple[str, str]:
     """
     校验“最高允许工作压力”：
