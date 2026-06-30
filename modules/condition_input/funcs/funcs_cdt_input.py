@@ -3343,7 +3343,9 @@ def validate_design_table_cell(param_name: str, column_name: str, value: str, li
             ("液柱静压力", "壳程数值"): ("float", (0, 1e10), "液柱静压力的参数值不能为负，请核对后输入"),
             ("液柱静压力", "管程数值"): ("float", (0, 1e10), "液柱静压力的参数值不能为负，请核对后输入"),
             ("腐蚀裕量*", "壳程数值"): ("float", (0, 1e10), "腐蚀裕量的参数值不能为负，请核对后输入"),
-            ("腐蚀裕量*", "管程数值"): ("float", (0, 1e10), "腐蚀裕量的参数值不能为负，请核对后输入")
+            ("腐蚀裕量*", "管程数值"): ("float", (0, 1e10), "腐蚀裕量的参数值不能为负，请核对后输入"),
+            ("雪压值", "壳程数值"): ("float", (0, None), "输入雪压值不能为负，请核对后输入"),
+            ("雪压值", "管程数值"): ("float", (0, None), "输入雪压值不能为负，请核对后输入")
         }
 
         print(f"[校验函数] param={param_name}, col={column_name}, value='{value}'")
@@ -3375,7 +3377,7 @@ def validate_design_table_cell(param_name: str, column_name: str, value: str, li
             try:
                 if limits:
                     min_v, max_v = limits
-                    if not (min_v <= num <= max_v):
+                    if (min_v is not None and num < min_v) or (max_v is not None and num > max_v):
                         safe_set_text_and_color(line_edit_widget, msg, "red")
                         return "error"
                 safe_set_text_and_color(line_edit_widget, "", "black")
@@ -5879,6 +5881,12 @@ def _merge_container_design_dropdowns(config: dict) -> None:
         "type": "single",
         "editable": False,
         "options": list(CONTAINER_SHELL_LENGTH_BASIS_OPTIONS),
+    }
+
+    config["焊后热处理"] = {
+        "type": "single",
+        "editable": False,
+        "options": ["是", "否", "程序推荐"],
     }
 
     if "表面处理合格级别" not in config and "表面处理合格级别" in general_cfg:
