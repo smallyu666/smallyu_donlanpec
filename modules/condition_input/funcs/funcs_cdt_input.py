@@ -5690,7 +5690,13 @@ class MultiParamComboDelegate(QStyledItemDelegate):
             editor.setCheckedItems(values)
         else:
             i = editor.findText(val)
-            editor.setCurrentIndex(i if i >= 0 else 0)
+            if i >= 0:
+                editor.setCurrentIndex(i)
+            else:
+                if editor.isEditable():
+                    editor.setEditText(val)
+                else:
+                    editor.setCurrentIndex(0)
 
     def setModelData(self, editor, model, index):
         conf, param_name = self._get_config(index)
@@ -5874,6 +5880,15 @@ def _merge_container_design_dropdowns(config: dict) -> None:
         "editable": False,
         "options": list(CONTAINER_SHELL_LENGTH_BASIS_OPTIONS),
     }
+
+    if "表面处理合格级别" not in config and "表面处理合格级别" in general_cfg:
+        config["表面处理合格级别"] = general_cfg["表面处理合格级别"]
+
+    if "表面处理位置" not in config and "表面处理位置" in general_cfg:
+        config["表面处理位置"] = general_cfg["表面处理位置"]
+
+    if "硬度试验标准" not in config and "硬度试验标准" in general_cfg:
+        config["硬度试验标准"] = general_cfg["硬度试验标准"]
 
 
 def get_product_type_from_db(product_id):

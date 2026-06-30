@@ -114,7 +114,8 @@ class SmartDelegate(QStyledItemDelegate):
             except Exception:
                 pass
             try:
-                editor.currentTextChanged.connect(lambda *_: self.commitData.emit(editor))
+                if not editor.isEditable():
+                    editor.currentTextChanged.connect(lambda *_: self.commitData.emit(editor))
             except Exception:
                 pass
         return editor
@@ -173,7 +174,7 @@ class ReturnKeyJumpFilter(QObject):
                 next_row = row + 1
 
                 if next_row >= self.table.rowCount():
-                    next_row = 0  # 到最后一行则回到第一行，可按需修改逻辑
+                    return True  # 到最后一行则直接拦截，不跳转也不进入编辑模式
 
                 self.table.setCurrentCell(next_row, col)
                 # 自动进入编辑模式，实现键盘直接键入
