@@ -3345,7 +3345,9 @@ def validate_design_table_cell(param_name: str, column_name: str, value: str, li
             ("腐蚀裕量*", "壳程数值"): ("float", (0, 1e10), "腐蚀裕量的参数值不能为负，请核对后输入"),
             ("腐蚀裕量*", "管程数值"): ("float", (0, 1e10), "腐蚀裕量的参数值不能为负，请核对后输入"),
             ("雪压值", "壳程数值"): ("float", (0, None), "输入雪压值不能为负，请核对后输入"),
-            ("雪压值", "管程数值"): ("float", (0, None), "输入雪压值不能为负，请核对后输入")
+            ("雪压值", "管程数值"): ("float", (0, None), "输入雪压值不能为负，请核对后输入"),
+            ("基本风压", "壳程数值"): ("float", (0, None), "基本风压值不能为负，请核对后输入"),
+            ("基本风压", "管程数值"): ("float", (0, None), "基本风压值不能为负，请核对后输入")
         }
 
         print(f"[校验函数] param={param_name}, col={column_name}, value='{value}'")
@@ -5891,6 +5893,15 @@ def _merge_container_design_dropdowns(config: dict) -> None:
 
     if "表面处理合格级别" not in config and "表面处理合格级别" in general_cfg:
         config["表面处理合格级别"] = general_cfg["表面处理合格级别"]
+
+    if "地面粗糙度" not in config and "地面粗糙度" in general_cfg:
+        config["地面粗糙度"] = general_cfg["地面粗糙度"]
+
+    if "地震分组" not in config and "地震分组" in general_cfg:
+        config["地震分组"] = general_cfg["地震分组"]
+
+    if "场地土类别" not in config and "场地土地类别" in general_cfg:
+        config["场地土类别"] = general_cfg["场地土地类别"]
 
     if "表面处理位置" not in config and "表面处理位置" in general_cfg:
         config["表面处理位置"] = general_cfg["表面处理位置"]
