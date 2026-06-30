@@ -595,6 +595,37 @@ def check_max_min_work_temp(value, tip_widget, param_name, column_name, table_wi
 
     return "ok", ""
 
+def check_filling_factor(value, tip_widget, param_name, column_name, table_widget, col_index) -> Tuple[str, str]:
+    if value.strip() == "":
+        return "ok", ""
+    try:
+        val = float(value)
+    except:
+        return "error", "输入数据类型有误，请确认后输入"
+
+    if val <= 0 or val > 1:
+        return "error", "输入数值不合理，请填写 0 到 1 之间的数字"
+
+    if not table_widget:
+        return "ok", ""
+
+    media_char = None
+    for row in range(table_widget.rowCount()):
+        name = get_param_name(table_widget, row)
+        if not name:
+            continue
+
+        if name == "介质特性（是否液化气体）":
+            val_item = table_widget.item(row, col_index)
+            if val_item and val_item.text().strip():
+                media_char = val_item.text().strip()
+            break
+
+    if media_char == "液化气体" and val > 0.95:
+        return "error", "TSG 21-2016 规定，储存液化气体的压力容器，装量系数不得大于 0.95。"
+
+    return "ok", ""
+
 
 def check_work_pressure_max(value, tip_widget, param_name, column_name, table_widget, col_index) -> Tuple[str, str]:
     """
