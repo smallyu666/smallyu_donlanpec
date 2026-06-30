@@ -325,6 +325,19 @@ class TypeToStartEditFilter(QObject):
         if self.table.objectName() == "tableWidget_design_data" and current.column() == 1:
             return False
 
+        # 不可编辑的下拉格：禁止键入字符打开编辑（只能双击点选）
+        try:
+            if hasattr(self.smart_delegate, "is_dropdown_cell") and self.smart_delegate.is_dropdown_cell(current):
+                dd = getattr(self.smart_delegate, "dropdown_delegate", None)
+                if dd:
+                    param_item = self.table.item(current.row(), 1)
+                    param_name = param_item.text().strip() if param_item else ""
+                    conf = dd.config.get(param_name)
+                    if conf and conf.get("type") == "single" and not conf.get("editable", False):
+                        return False
+        except Exception:
+            pass
+
         self.table.edit(current)
         captured = ch
         QTimer.singleShot(0, lambda t=captured: self._inject_text_into_focus_editor(t))

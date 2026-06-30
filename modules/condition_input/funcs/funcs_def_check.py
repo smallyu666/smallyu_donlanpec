@@ -132,6 +132,32 @@ def get_param_name(table_widget, row):
             return name
     return name
 
+def check_container_outer_diameter(value, tip_widget, param_name, column_name, table_widget, col_index) -> Tuple[str, str]:
+    """容器外径*：正数；非数字报错（美标表值可能含一位小数，允许整数或小数）。"""
+    if value.strip() == "":
+        return "ok", ""
+    try:
+        v = float(value.strip())
+    except ValueError:
+        return "error", "输入数据类型有误，请确认后输入"
+    if v <= 0:
+        return "error", "外径必须大于0，请核对后输入"
+    return "ok", ""
+
+
+def check_container_shell_length(value, tip_widget, param_name, column_name, table_widget, col_index) -> Tuple[str, str]:
+    """容器壳体长度*：整数且 > 0（mm）。"""
+    if value.strip() == "":
+        return "ok", ""
+    try:
+        length_val = int(value.strip())
+    except ValueError:
+        return "error", "输入数据类型有误，请确认后输入"
+    if length_val <= 0:
+        return "error", "容器壳体长度必须大于0，请核对后输入"
+    return "ok", ""
+
+
 def check_dn(value, tip_widget, param_name, column_name, table_widget, col_index) -> Tuple[str, str]:
     if value.strip() == "":
         return "ok", ""
