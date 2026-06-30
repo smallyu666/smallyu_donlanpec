@@ -140,6 +140,13 @@ def check_dn(value, tip_widget, param_name, column_name, table_widget, col_index
     except ValueError:
         return "error", "输入数据类型有误，请确认后输入"
 
+    # 容器：公称直径必须大于 0（换热器仍仅校验整数，不加此下限）
+    if table_widget:
+        viewer = getattr(table_widget, "viewer", None)
+        if viewer and "容器" in (getattr(viewer, "product_type", "") or ""):
+            if dn_val <= 0:
+                return "error", "公称直径必须大于0，请核对后输入"
+
     # 0103新修改2
     # ✅ 新增：根据"是否以外径为基准*"参数值校验公称直径允许值（从数据库读取）
     if table_widget:
