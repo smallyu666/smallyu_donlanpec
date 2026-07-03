@@ -3347,7 +3347,9 @@ def validate_design_table_cell(param_name: str, column_name: str, value: str, li
             ("雪压值", "壳程数值"): ("float", (0, None), "输入雪压值不能为负，请核对后输入"),
             ("雪压值", "管程数值"): ("float", (0, None), "输入雪压值不能为负，请核对后输入"),
             ("基本风压", "壳程数值"): ("float", (0, None), "基本风压值不能为负，请核对后输入"),
-            ("基本风压", "管程数值"): ("float", (0, None), "基本风压值不能为负，请核对后输入")
+            ("基本风压", "管程数值"): ("float", (0, None), "基本风压值不能为负，请核对后输入"),
+            ("使用年限", "壳程数值"): ("int", None, ""),
+            ("使用年限", "管程数值"): ("int", None, "")
         }
 
         print(f"[校验函数] param={param_name}, col={column_name}, value='{value}'")
@@ -5902,6 +5904,14 @@ def _merge_container_design_dropdowns(config: dict) -> None:
 
     if "场地土类别" not in config and "场地土地类别" in general_cfg:
         config["场地土类别"] = general_cfg["场地土地类别"]
+
+    if "地震设防烈度" not in config and "地震设防烈度" in general_cfg:
+        config["地震设防烈度"] = general_cfg["地震设防烈度"]
+    if "抗震设防烈度" not in config and "抗震设防烈度" in general_cfg:
+        config["抗震设防烈度"] = general_cfg["抗震设防烈度"]
+
+    if "地震加速度" not in config and "地震加速度" in general_cfg:
+        config["地震加速度"] = general_cfg["地震加速度"]
 
     if "表面处理位置" not in config and "表面处理位置" in general_cfg:
         config["表面处理位置"] = general_cfg["表面处理位置"]
