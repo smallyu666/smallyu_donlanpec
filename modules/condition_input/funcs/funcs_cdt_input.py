@@ -1093,24 +1093,37 @@ def fetch_all_mode_orders():
 
 
 def _read_row_as_list(table_widget, row):
-    """把一行所有列的 QTableWidgetItem 文本读取为 list[str]；空位返回''。"""
+    """把一行所有列的 QTableWidgetItem 文本读取为 list[str]；空位返回''。对于序号列读取真实的UserRole。"""
     cols = table_widget.columnCount()
     values = []
     for c in range(cols):
         item = table_widget.item(row, c)
-        values.append(item.text() if item else "")
+        if item is None:
+            values.append("")
+        elif c == 0:
+            user_data = item.data(Qt.UserRole)
+            if user_data is not None:
+                values.append(str(user_data))
+            else:
+                values.append(item.text())
+        else:
+            values.append(item.text())
     return values
 
 
 def _write_row_from_list(table_widget, row, values, header_userroles=None):
-    """把 list[str] 写回到指定行；尽可能维持原对齐/可编辑属性的简化版。"""
+    """把 list[str] 写回到指定行；尽可能维持原对齐/可编辑属性的简化版。对于序号列将真实值写入UserRole，文本显示行号。"""
     cols = table_widget.columnCount()
     for c in range(cols):
         val = values[c] if c < len(values) else ""
         item = QTableWidgetItem(val)
-        # 名称列/单位列按原 fill_table_widget 约定设置 flags & 对齐
+        
         header_item = table_widget.horizontalHeaderItem(c)
         header_text = header_item.text() if header_item else ""
+        
+        if c == 0 and header_text == "序号":
+            item.setData(Qt.UserRole, val)
+            item.setText(str(row + 1))
         # 默认：可编辑
         if header_text in ("序号",):
             # 序号列：不可编辑，居中
@@ -1143,7 +1156,12 @@ def capture_default_order(table_widget):
     ids = []
     for r in range(table_widget.rowCount()):
         item = table_widget.item(r, 0)
-        ids.append(int(item.text())) if (item and item.text().strip().isdigit()) else ids.append(None)
+        if item:
+            user_data = item.data(Qt.UserRole)
+            text_val = str(user_data) if user_data is not None else item.text().strip()
+            ids.append(int(text_val)) if text_val.isdigit() else ids.append(None)
+        else:
+            ids.append(None)
     # 保存两份：id列表 与 id->原始行号映射
     table_widget._default_param_ids = ids[:]  # 可能有空行 None
     id2row = {}
@@ -1253,7 +1271,12 @@ def apply_mode_param_order(table_widget, target_id_seq):
     for r in range(table_widget.rowCount()):
         it = table_widget.item(r, 0)
         try:
-            cur_ids.append(int(it.text().strip()) if it and it.text().strip() else None)
+            if it:
+                user_data = it.data(Qt.UserRole)
+                val = str(user_data) if user_data is not None else it.text().strip()
+                cur_ids.append(int(val) if val else None)
+            else:
+                cur_ids.append(None)
         except Exception:
             cur_ids.append(None)
         # 获取参数名称（第1列），用于判断是否为必填项（带*）
@@ -2159,7 +2182,14 @@ def get_table_data(table_widget):
         row_data = {}
         for col_index, header in enumerate(headers):
             item = table_widget.item(row, col_index)
-            value = item.text() if item else ""
+            if item:
+                if col_index == 0 and table_widget.horizontalHeaderItem(0) and table_widget.horizontalHeaderItem(0).text() == "序号":
+                    user_data = item.data(Qt.UserRole)
+                    value = str(user_data) if user_data is not None else item.text()
+                else:
+                    value = item.text()
+            else:
+                value = ""
             row_data[header] = value
         data.append(row_data)
 
@@ -4752,31 +4782,32 @@ def validate_all_tables_after_import(viewer: QWidget):
                     cell.setText("/")
                     tip_list.append(f"[设计数据] 已根据「是否以外径为基准」为否，将{pname}置为「/」。")
 
-    # ✅ 通用数据表
-    table = viewer.tableWidget_general_data
-    for row in range(table.rowCount()):
-        param_item = table.item(row, 1)
-        value_item = table.item(row, 3)
-        if not param_item or not value_item or not param_item.text() or not value_item.text():
-            continue
-        param_name = param_item.text().strip()
-        val = value_item.text().strip()
-
-        conf = GENERAL_PARAM_CONFIG.get(param_name)
-        if conf and not conf.get("editable", False):  # ✅ 仅校验不可编辑字段
-            corrected_val, msg = validate_dropdown_value(param_name, val, GENERAL_PARAM_CONFIG)
-            value_item.setText(corrected_val)
-            if msg:
-                tip_list.append(f"[通用数据] {param_name}: {msg}")
-            continue
-
-        # ✅ 再做常规校验
-        result = validate_general_table_cell(param_name, val, QTableWidgetItem(), table)
-        if result == "error":
-            value_item.setText("")
-            tip_list.append(f"[通用数据] {param_name}: ❌ 非法值，已清空")
-        elif result == "warn":
-            tip_list.append(f"[通用数据] {param_name}: ⚠️ 可疑值")
+    # ✅ 通用数据表（容器不适用，跳过校验）
+    if not is_container:
+        table = viewer.tableWidget_general_data
+        for row in range(table.rowCount()):
+            param_item = table.item(row, 1)
+            value_item = table.item(row, 3)
+            if not param_item or not value_item or not param_item.text() or not value_item.text():
+                continue
+            param_name = param_item.text().strip()
+            val = value_item.text().strip()
+    
+            conf = GENERAL_PARAM_CONFIG.get(param_name)
+            if conf and not conf.get("editable", False):  # ✅ 仅校验不可编辑字段
+                corrected_val, msg = validate_dropdown_value(param_name, val, GENERAL_PARAM_CONFIG)
+                value_item.setText(corrected_val)
+                if msg:
+                    tip_list.append(f"[通用数据] {param_name}: {msg}")
+                continue
+    
+            # ✅ 再做常规校验
+            result = validate_general_table_cell(param_name, val, QTableWidgetItem(), table)
+            if result == "error":
+                value_item.setText("")
+                tip_list.append(f"[通用数据] {param_name}: ❌ 非法值，已清空")
+            elif result == "warn":
+                tip_list.append(f"[通用数据] {param_name}: ⚠️ 可疑值")
 
     # ✅ 检测数据表：检测比例列已有校验，这里扩展对委托配置列校验（技术等级/合格级别）
     trail_config = apply_trail_data_dropdowns()
@@ -5562,7 +5593,7 @@ def autofill_trail_test_grade(trail_table: QTableWidget, row: int, side: str, un
     - side: "壳程" / "管程"
     - 返回值：是否发生写入
     """
-    headers = {trail_table.horizontalHeaderItem(c).text().strip(): c
+    headers = {resolve_header_field_name(trail_table, c): c
                for c in range(trail_table.columnCount()) if trail_table.horizontalHeaderItem(c)}
 
     method_item = trail_table.item(row, headers.get("检测方法"))

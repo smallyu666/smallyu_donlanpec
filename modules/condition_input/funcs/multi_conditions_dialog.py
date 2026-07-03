@@ -159,9 +159,12 @@ class MultiConditionsDialog(QDialog):
             try:
                 for r in range(parent.tableWidget_design_data.rowCount()):
                     it = parent.tableWidget_design_data.item(r, 0)
-                    if it and it.text().strip().isdigit() and int(it.text().strip()) >= 35:
-                        self.is_container = True
-                        break
+                    if it:
+                        user_data = it.data(Qt.UserRole)
+                        val = str(user_data) if user_data is not None else it.text().strip()
+                        if val.isdigit() and int(val) >= 35:
+                            self.is_container = True
+                            break
             except Exception:
                 pass
         

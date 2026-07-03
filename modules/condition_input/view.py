@@ -796,7 +796,8 @@ class DesignConditionInputViewer(QWidget):
         for row_idx, row in enumerate(rows):
             if index_header:
                 index_value = row.get(index_header, "")
-                index_item = QTableWidgetItem(str(index_value))
+                index_item = QTableWidgetItem(str(row_idx + 1))  # 界面上显示连续的序号
+                index_item.setData(Qt.UserRole, str(index_value))  # 真实的ID保存在UserRole
                 index_item.setTextAlignment(Qt.AlignCenter)
                 index_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
                 table_widget.setItem(row_idx, 0, index_item)
