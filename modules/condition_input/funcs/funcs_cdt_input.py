@@ -3317,6 +3317,8 @@ def validate_design_table_cell(param_name: str, column_name: str, value: str, li
             ("耐压试验介质密度", "管程数值"): check_trail_stand_pressure_medium_density,
             ("绝热层厚度", "壳程数值"): check_insulation_layer_thickness,
             ("绝热层厚度", "管程数值"): check_insulation_layer_thickness,
+            ("绝热材料厚度", "壳程数值"): check_insulation_layer_thickness,
+            ("绝热材料厚度", "管程数值"): check_insulation_layer_thickness,
             ("绝热材料密度", "壳程数值"): check_insulation_material_density,
             ("绝热材料密度", "管程数值"): check_insulation_material_density,
             ("耐压试验类型*", "壳程数值"): check_trail_stand_pressure_type,
@@ -5336,7 +5338,7 @@ def handle_cross_table_triggers(viewer: QWidget, changed_table: QTableWidget, ro
                 return
 
             make_fields_editable = not is_none_now
-            param_names = {"绝热材料", "绝热层厚度", "绝热材料密度"}
+            param_names = {"绝热材料", "绝热层厚度", "绝热材料厚度", "绝热材料密度"}
 
             for r in range(changed_table.rowCount()):
                 sub_item = changed_table.item(r, 1)
@@ -5891,6 +5893,12 @@ def _merge_container_design_dropdowns(config: dict) -> None:
         "type": "single",
         "editable": False,
         "options": ["是", "否", "程序推荐"],
+    }
+
+    config["绝热类型"] = {
+        "type": "single",
+        "editable": False,
+        "options": ["保温", "保冷", "无"],
     }
 
     if "表面处理合格级别" not in config and "表面处理合格级别" in general_cfg:
