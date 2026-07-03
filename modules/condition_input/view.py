@@ -1780,21 +1780,7 @@ class DesignConditionInputViewer(QWidget):
 
         mode_lookup_name = mode_name
         
-        # --- 新增：更为鲁棒的容器判定逻辑 ---
-        is_container = False
-        if hasattr(self, 'product_type') and self.product_type and "容器" in self.product_type:
-            is_container = True
-        else:
-            # 备用判定方案：扫描表格内容，若包含典型的容器参数ID（如 >= 35），强制判定为容器
-            try:
-                for r in range(self.tableWidget_design_data.rowCount()):
-                    it = self.tableWidget_design_data.item(r, 0)
-                    if it and it.text().strip().isdigit():
-                        if int(it.text().strip()) >= 35:
-                            is_container = True
-                            break
-            except Exception:
-                pass
+        is_container = self._is_container_product()
                 
         if is_container:
             specific_mode_name = f"{mode_name}_容器"
@@ -1806,12 +1792,14 @@ class DesignConditionInputViewer(QWidget):
                 if specific_mode_name in self._mode_orders:
                     mode_lookup_name = specific_mode_name
 
-        # 默认模式 = 恢复默认顺序（即初始载入时顺序） 
-        # 但如果是容器且配置了专属模板（此时 lookup_name != mode_name），则跳过此恢复逻辑，强制查表
+        # 默认模式（设计模式）也优先使用模板排序，如果没找到对应模板再恢复默认顺序
         if mode_lookup_name == self._default_mode_name or mode_lookup_name.strip() == "":
-            # 用"默认ID顺序"再排一次（就是 capture_default_order 记录那次的出现次序）
-            restore_default_order(self.tableWidget_design_data)
-
+            target_ids = self._mode_orders.get(mode_lookup_name)
+            if target_ids:
+                apply_mode_param_order(self.tableWidget_design_data, target_ids)
+            else:
+                restore_default_order(self.tableWidget_design_data)
+                
             ## 1111新修改-2金属温度单元格不可编辑
             # 切换到设计模式后，重新应用NEN/BEM产品的特殊只读单元格
             self._apply_special_readonly_for_nen_bem()
@@ -1820,18 +1808,17 @@ class DesignConditionInputViewer(QWidget):
                     refresh_container_outer_diameter_linkage(self)
             except Exception:
                 pass
-            return
+        else:
+            print(f"[DEBUG] 最终采用的排序模板名: {mode_lookup_name}")
+            target_ids = self._mode_orders.get(mode_lookup_name)
+            if not target_ids:
+                print(f"[DEBUG] 警告: 未找到名为 {mode_lookup_name} 的排序模板")
+                return
 
-        print(f"[DEBUG] 最终采用的排序模板名: {mode_lookup_name}")
-        target_ids = self._mode_orders.get(mode_lookup_name)
-        if not target_ids:
-            print(f"[DEBUG] 警告: 未找到名为 {mode_lookup_name} 的排序模板")
-            return
-
-        # 仅重排三张含“参数ID”的表
-        # apply_mode_param_order(self.tableWidget_product_std, target_ids)
-        apply_mode_param_order(self.tableWidget_design_data, target_ids)
-        # apply_mode_param_order(self.tableWidget_general_data, target_ids)
+            # 仅重排三张含“参数ID”的表
+            # apply_mode_param_order(self.tableWidget_product_std, target_ids)
+            apply_mode_param_order(self.tableWidget_design_data, target_ids)
+            # apply_mode_param_order(self.tableWidget_general_data, target_ids)
 
         # ===== 新增：模式切换后，将设计数据表格的序号列设为不可编辑 =====
         print(f"[DEBUG] 正在设置设计数据表格（tableWidget_design_data）的序号列（第0列）为不可编辑")  # ✅ 调试打印
