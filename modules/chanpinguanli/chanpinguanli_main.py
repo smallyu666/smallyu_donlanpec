@@ -2019,19 +2019,32 @@ def _generate_unique_folder_path(base_folder_path: str) -> str:
         index += 1
 
 
-def _prepare_new_product_folder(source_folder: str, target_folder: str, new_product_id: str):
+def _prepare_new_product_folder(
+    source_folder: str,
+    target_folder: str,
+    new_product_id: str,
+    product_type: str = "",
+):
     """复制或初始化产品目录，并写入新产品ID。"""
     if source_folder and os.path.isdir(source_folder):
         shutil.copytree(source_folder, target_folder)
     else:
+        from modules.chanpinguanli import local_product_folder as lpf
+
         os.makedirs(target_folder, exist_ok=True)
-        # 源目录缺失时仍补齐模板文件，保证新产品可用
-        template_path = os.path.join(os.path.dirname(__file__), "条件输入数据表.xlsx")
-        template_path2 = os.path.join(os.path.dirname(__file__), "管口导入模板.xlsx")
-        if os.path.exists(template_path):
-            shutil.copy(template_path, os.path.join(target_folder, "条件输入数据表.xlsx"))
-        if os.path.exists(template_path2):
-            shutil.copy(template_path2, os.path.join(target_folder, "管口导入模板.xlsx"))
+        # 源目录缺失时按产品类型补齐模板（容器用容器条件输入表，且不复制管口模板）
+        condition_template = lpf._condition_template_path(product_type)
+        if os.path.exists(condition_template):
+            shutil.copy(
+                condition_template,
+                os.path.join(target_folder, "条件输入数据表.xlsx"),
+            )
+        if not lpf._is_container_product_type(product_type):
+            if os.path.exists(lpf._TEMPLATE_NOZZLE):
+                shutil.copy(
+                    lpf._TEMPLATE_NOZZLE,
+                    os.path.join(target_folder, lpf._NOZZLE_REQUIRED_FILE),
+                )
 
     with open(os.path.join(target_folder, "pro_id.csv"), "w", encoding="utf-8") as f:
         f.write(str(new_product_id))
@@ -2219,7 +2232,12 @@ def copy_selected_product():
             source_folder = (source_activity_main.get("产品文件夹绝对路径") or "").strip()
 
         # 先处理本地目录，确保数据库路径写入的是可用目录
-        _prepare_new_product_folder(source_folder, target_folder, new_product_id)
+        _prepare_new_product_folder(
+            source_folder,
+            target_folder,
+            new_product_id,
+            source_product_row.get("产品类型") or "",
+        )
         target_folder_abs = os.path.abspath(target_folder)
 
         # 开始写库（产品库 + 活动库）
@@ -3006,13 +3024,6 @@ def load_last_project():
                     bianl.product_form_combo.setCurrentText(first_product.get("产品型式", "") or "")
                     bianl.product_model_input.setText(first_product.get("产品型号", "") or "")
                     bianl.drawing_prefix_input.setText(first_product.get("图号前缀", "") or "")
-
-                    bianl.design_input.setText(first_product.get("设计", "") or "")
-                    bianl.proofread_input.setText(first_product.get("校对", "") or "")
-                    bianl.review_input.setText(first_product.get("审核", "") or "")
-                    bianl.standardization_input.setText(first_product.get("标准化", "") or "")
-                    bianl.approval_input.setText(first_product.get("批准", "") or "")
-                    bianl.co_signature_input.setText(first_product.get("会签", "") or "")
 
                     if row0_status == "view":
                         bianl.product_table_row_status[0]["definition_status"] = "view"
