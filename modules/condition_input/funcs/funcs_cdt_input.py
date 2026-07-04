@@ -1689,11 +1689,36 @@ def render_grouped_table(table_widget, grouped_data, headers, group_key_column=0
                 if detect_method in ["M.T.", "P.T.", "M.T.[FB]"] and key in ["壳程_合格级别", "管程_合格级别"]:
                     item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
 
-                # 特殊逻辑：T（管头） → 壳程三列不可编辑，且默认填 "/"
-                if jt_type == "T（管头）" and key in ["壳程_技术等级", "壳程_合格级别", "壳程_检测比例"]:
-                    item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-                    if not val.strip():
-                        item.setText("/")
+                # # 特殊逻辑：T（管头） → 壳程三列不可编辑，且默认填 "/"
+                # if jt_type == "T（管头）" and key in ["壳程_技术等级", "壳程_合格级别", "壳程_检测比例"]:
+                #     item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+                #     if not val.strip():
+                #         item.setText("/")
+                # 特殊逻辑：T（管头）
+                if jt_type == "T（管头）":
+                    # 1. 壳程_检测比例：不加锁定代码，保持可编辑
+                    if key == "壳程_检测比例":
+                        if detect_method == "P.T.":
+                            # 如果是 P.T.，遇到空值或旧模板的 "/"，强制给 100
+                            if not val.strip() or val == "/":
+                                item.setText("100")
+                        elif detect_method == "R.T.":
+                            if not val.strip():
+                                item.setText("/")
+
+                    # 2. 技术等级与合格级别：加锁（不可编辑）
+                    elif key in ["壳程_技术等级", "壳程_合格级别"]:
+                        item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+
+                        if detect_method == "P.T." and key == "壳程_合格级别":
+                            # P.T. 的合格级别，遇到空或旧的 "/"，填 Ⅰ
+                            if not val.strip() or val == "/":
+                                item.setText("Ⅰ")
+                        else:
+                            # 其他情况（包括 R.T. 的两列，以及 P.T. 的技术等级），填 /
+                            if not val.strip():
+                                item.setText("/")
+
 
                 # 默认值作为校验基准
                 if key.endswith("技术等级") or key.endswith("合格级别"):
@@ -2118,6 +2143,25 @@ def normalize_design_column_name(column_name: str) -> str:
     if column_name == "数值":
         return "壳程数值"
     return column_name
+
+
+def get_trail_side_from_field(field_name: str):
+    """检测数据逻辑字段名 → 壳程/管程侧别（容器表头无「壳程」字样时也适用）。"""
+    field_name = (field_name or "").strip()
+    if field_name.startswith("壳程_"):
+        return "壳程"
+    if field_name.startswith("管程_"):
+        return "管程"
+    return None
+
+
+def find_trail_column_by_field(table_widget: QTableWidget, field_name: str):
+    """按逻辑字段名查找检测数据表列索引。"""
+    field_name = (field_name or "").strip()
+    for col in range(table_widget.columnCount()):
+        if resolve_header_field_name(table_widget, col) == field_name:
+            return col
+    return None
 
 
 def is_container_viewer(viewer) -> bool:
@@ -3108,7 +3152,7 @@ def sync_opening_weld_joint_coeff_to_guankou_param(
 
 def save_all_tables(viewer, product_id):
     """
-    保存所有表格数据（标准、设计、通用、涂漆、无损检测）至数据库
+    保存所有表格数据（标准、设计、涂漆、无损检测；换热器另含通用数据）至数据库
     """
     try:
         if not product_id:
@@ -3116,6 +3160,7 @@ def save_all_tables(viewer, product_id):
             return
 
         is_from_design_lib = viewer.design_data_source == "设计活动库"
+        is_container = is_container_viewer(viewer)
 
         # 提取数据并保存到各自表
         save_data_to_database(
@@ -3156,14 +3201,15 @@ def save_all_tables(viewer, product_id):
         except Exception as e:
             print(f"[警告] 设计数据保存后的腐蚀裕量同步失败: {e}")
 
-        save_data_to_database(
-            get_table_data(viewer.tableWidget_general_data),
-            product_id,
-            "产品设计活动表_通用数据表",
-            viewer.tableWidget_general_data,
-            is_from_design_lib,
-            viewer=viewer  # 传递viewer实例以便访问计算值缓存
-        )
+        if not is_container:
+            save_data_to_database(
+                get_table_data(viewer.tableWidget_general_data),
+                product_id,
+                "产品设计活动表_通用数据表",
+                viewer.tableWidget_general_data,
+                is_from_design_lib,
+                viewer=viewer  # 传递viewer实例以便访问计算值缓存
+            )
 
         save_coating_table_to_database(
             viewer.tableWidget_coating_data,
@@ -3531,16 +3577,21 @@ def validate_trail_table_cell(column_name: str, value: str, tip_widget, table_wi
             method_item = table_widget.item(row_index, 1)
             method = method_item.text().strip() if method_item else ""
 
-            if jt_type == "T（管头）" and method in ["R.T.", "P.T."] \
-                    and (column_name.startswith("壳程_技术等级")
-                         or column_name.startswith("壳程_合格级别")
-                         or column_name.startswith("壳程_检测比例")):
-                if val == "/":
-                    safe_set_text_and_color(tip_widget, "", "black")
-                    return "ok"
-                else:
-                    safe_set_text_and_color(tip_widget, "此处仅允许 '/'", "red")
-                    return "error"
+            # if jt_type == "T（管头）" and method in ["R.T.", "P.T."] \
+            #         and (column_name.startswith("壳程_技术等级")
+            #              or column_name.startswith("壳程_合格级别")
+            #              or column_name.startswith("壳程_检测比例")):
+            #     if val == "/":
+            #         safe_set_text_and_color(tip_widget, "", "black")
+            #         return "ok"
+            #     else:
+            #         safe_set_text_and_color(tip_widget, "此处仅允许 '/'", "red")
+            #         return "error"
+            # 给 T(管头) 的默认值 '/' 开绿灯，遇到其他的合法标准值（如 AB、Ⅱ）则放行给通用规则校验
+            if jt_type == "T（管头）" and val == "/":
+                safe_set_text_and_color(tip_widget, "", "black")
+                return "ok"
+
         except Exception as e:
             print(f"[validate_trail_table_cell][DEBUG] 特殊规则异常: {e}")
 
@@ -4238,7 +4289,7 @@ def import_multi_conditions_from_excel(excel_path: str, product_id: int, viewer:
         """
         不硬编码900000，按当前产品动态计算多工况ID起点：
         - normal_max：当前产品常规参数最大ID（排除[工况]）
-        - template_max：模板表最大ID（按产品型式过滤：NEN/AEM/BEM额外包含'NEN,AEM,BEM'行；其余仅'all'）
+        - template_max：模板表最大ID（按产品型式过滤：NEN/AEM/BEM/单腔型/双腔型等额外包含对应型式行；其余仅'all'）
         - multi_max：当前产品已有多工况最大ID（若历史已高位，沿用）
         返回 (base, safe_threshold, legacy_high)。
         """
@@ -4272,7 +4323,7 @@ def import_multi_conditions_from_excel(excel_path: str, product_id: int, viewer:
             r2 = cur.fetchone() or {}
             multi_max = int(r2.get("max_id") or 0)
 
-            if product_form in ("NEN", "AEM", "BEM", "NEN(Head)"):
+            if product_form in ("NEN", "AEM", "BEM", "NEN(Head)", "单腔型", "双腔型"):
                 cur.execute(
                     """
                     SELECT MAX(设计数据参数ID) AS max_id
@@ -4316,6 +4367,31 @@ def import_multi_conditions_from_excel(excel_path: str, product_id: int, viewer:
         offset = (gk_no - 2) * len(param_order) + idx
         return int(base or 0) + offset
 
+    def _clear_multi_import_table(table: QTableWidget):
+        """导入校核前清空临时多工况表，避免默认载入的工况1数据参与联动校验。"""
+        value_cols = [1] if is_container else [1, 2]
+        for r in range(table.rowCount()):
+            for c in value_cols:
+                item = QTableWidgetItem("")
+                item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(r, c, item)
+
+    def _write_multi_param_to_table(table: QTableWidget, pname_base: str, kc_val: str, gc_val: str):
+        """将 Excel 一行写入临时多工况表，返回表格行号。"""
+        for r in range(table.rowCount()):
+            header_item = table.verticalHeaderItem(r)
+            if not (header_item and header_item.text().strip() == pname_base):
+                continue
+            kc_item = QTableWidgetItem(kc_val)
+            kc_item.setTextAlignment(Qt.AlignCenter)
+            table.setItem(r, 1, kc_item)
+            if not is_container:
+                gc_item = QTableWidgetItem(gc_val)
+                gc_item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(r, 2, gc_item)
+            return r
+        return None
+
     conn = get_connection(**db_config_2)
     try:
         with conn.cursor() as cur:
@@ -4325,26 +4401,21 @@ def import_multi_conditions_from_excel(excel_path: str, product_id: int, viewer:
                 from modules.condition_input.funcs.multi_conditions_dialog import MultiConditionsDialog
                 dlg = MultiConditionsDialog(parent=viewer, product_id=product_id)
                 table = dlg.tableWidget
+                _clear_multi_import_table(table)
 
+                # 第一遍：先把本工况 Excel 全部写入临时表（联动校验需同工况参数齐全）
+                pending_rows = []
                 for idx in excel_row_range:
                     pname_base = str(df.iloc[idx, param_name_col]).strip()
                     if not pname_base:
                         continue
-
                     kc_val = str(df.iloc[idx, col_kc]).strip() if col_kc is not None else ""
                     gc_val = str(df.iloc[idx, col_gc]).strip() if col_gc is not None else ""
+                    table_row = _write_multi_param_to_table(table, pname_base, kc_val, gc_val)
+                    pending_rows.append((pname_base, kc_val, gc_val, table_row))
 
-                    # === 把 Excel 值写入临时弹窗表格 ===
-                    for r in range(table.rowCount()):
-                        header_item = table.verticalHeaderItem(r)
-                        if header_item and header_item.text().strip() == pname_base:
-                            if kc_val:
-                                table.setItem(r, 1, QTableWidgetItem(kc_val))
-                            if gc_val and not is_container:
-                                table.setItem(r, 2, QTableWidgetItem(gc_val))
-                            break
-
-                    # === 校核（调用 dispatch_cell_validation） ===
+                # 第二遍：校核并写库
+                for pname_base, kc_val, gc_val, table_row in pending_rows:
                     validation_pairs = [("壳程数值", (1, kc_val))]
                     if col_gc is not None:
                         validation_pairs.append(("管程数值", (2, gc_val)))
@@ -4353,7 +4424,7 @@ def import_multi_conditions_from_excel(excel_path: str, product_id: int, viewer:
                             continue
                         print(f"[导入校核DEBUG] pname={pname_base}, gongkuang={gk_no}, side={side}, val={val}")
                         result = dispatch_cell_validation(
-                            viewer, table, idx, col_idx,
+                            viewer, table, table_row if table_row is not None else 0, col_idx,
                             pname_base, side, val
                         )
                         if result == "error":
@@ -4570,7 +4641,7 @@ def update_trail_data_table_from_excel(excel_path: str, table_widget):
                 "管程_合格级别": str(row[7]).strip()
             }
             _apply_trail_excel_row(table_widget, current_row, values, field_to_col, viewer)
-
+            current_row += 1
     except Exception as e:
         raise RuntimeError(f"导入检测数据失败：{str(e)}")
 
@@ -4586,9 +4657,11 @@ def _apply_trail_excel_row(table_widget, current_row, values, field_to_col, view
         item = table_widget.item(current_row, col)
         cur_val = item.text().strip() if item else ""
 
-        if cur_val == "/":
-            print(f"[检测数据导入][DEBUG] row={current_row}, col={col}, 原值='/' → 跳过覆盖 (Excel值={val})")
+        # 新规则：只看单元格是否被锁死，不看内容是不是 '/'
+        if item and not (item.flags() & Qt.ItemIsEditable):
+            print(f"[检测数据导入][DEBUG] row={current_row}, col={col}, 单元格已锁定(不可编辑) → 跳过覆盖")
             continue
+
 
         if not item:
             item = QTableWidgetItem()
@@ -5062,7 +5135,7 @@ def save_local_condition_file(product_id: int, viewer: QWidget, local_path_overr
         wb["设计数据"], product_id, viewer.tableWidget_design_data, order_design, viewer=viewer
     )
 
-    TEMPLATE_MAX_ROWS = 50 if is_container else 34
+    TEMPLATE_MAX_ROWS = 50 if is_container else 35
     # 2. 获取当前UI界面上实际的数据行数
     current_data_rows = viewer.tableWidget_design_data.rowCount()
 
@@ -5302,6 +5375,70 @@ def trail_ratio_autofill_tip(viewer: QWidget, side: str) -> str:
     return f"[检测数据]{side}检测比例已自动联动更新技术等级与合格级别"
 
 
+def _revalidate_filling_factor_for_column(viewer, table: QTableWidget, col: int):
+    """介质特性（是否液化气体）变更后，反向校验同列装量系数。"""
+    header_map = get_header_column_map(table)
+    value_cols = {
+        c for c in (header_map.get("壳程数值"), header_map.get("管程数值")) if c is not None
+    }
+    if col not in value_cols:
+        return
+
+    ff_row = _find_design_row_by_param(table, "装量系数")
+    if ff_row < 0:
+        return
+
+    cell = table.item(ff_row, col)
+    if not cell:
+        return
+    value = cell.text().strip()
+    if not value:
+        return
+
+    column_name = normalize_design_column_name(resolve_header_field_name(table, col))
+    result = validate_design_table_cell(
+        "装量系数", column_name, value, viewer.line_tip, table, col
+    )
+    if result == "error":
+        QTimer.singleShot(0, lambda r=ff_row, c=col: table.item(r, c).setText(""))
+
+
+def _revalidate_custom_trial_pressure_for_column(viewer, table: QTableWidget, col: int):
+    """设计压力*或耐压试验类型*变更后，反向校验同列自定义耐压试验压力（卧/立）。"""
+    header_map = get_header_column_map(table)
+    value_cols = {
+        c for c in (header_map.get("壳程数值"), header_map.get("管程数值")) if c is not None
+    }
+    if col not in value_cols:
+        return
+
+    column_name = normalize_design_column_name(resolve_header_field_name(table, col))
+    tip_widget = getattr(viewer, "line_tip", None) or QTableWidgetItem()
+
+    for param_name in ("自定义耐压试验压力（卧）", "自定义耐压试验压力（立）"):
+        target_row = _find_design_row_by_param(table, param_name)
+        if target_row < 0:
+            continue
+        cell = table.item(target_row, col)
+        if not cell:
+            continue
+        value = cell.text().strip()
+        if not value:
+            continue
+        validate_design_table_cell(
+            param_name, column_name, value, tip_widget, table, col
+        )
+
+
+def revalidate_custom_trial_pressure_for_table(viewer, table: QTableWidget):
+    """主表数值列上重验自定义耐压试验压力（卧/立），供多工况工况1回写后调用。"""
+    header_map = get_header_column_map(table)
+    for key in ("壳程数值", "管程数值"):
+        col = header_map.get(key)
+        if col is not None:
+            _revalidate_custom_trial_pressure_for_column(viewer, table, col)
+
+
 def handle_cross_table_triggers(viewer: QWidget, changed_table: QTableWidget, row: int, col: int):
     undo_stack = getattr(viewer, "undo_stack", None)
 
@@ -5338,8 +5475,12 @@ def handle_cross_table_triggers(viewer: QWidget, changed_table: QTableWidget, ro
 
         param_name = name_item.text().strip()
 
+        # ✅ 介质特性（是否液化气体）变更 → 反向校验同列装量系数
+        if param_name == "介质特性（是否液化气体）":
+            _revalidate_filling_factor_for_column(viewer, changed_table, col)
+
         # ✅ 焊接接头系数联动检测数据
-        if "焊接接头系数*" in param_name:
+        elif "焊接接头系数*" in param_name:
             if col == 3:
                 shell_val = changed_table.item(row, 3).text().strip()
                 update_trail_table_side_only(viewer.tableWidget_trail_data, "壳程", shell_val, undo_stack)
@@ -5443,17 +5584,12 @@ def handle_cross_table_triggers(viewer: QWidget, changed_table: QTableWidget, ro
     # ✅ 检测比例 → 联动补齐 技术等级 和 合格级别（仅当为空）
     # ✅ 新增：清空其中任一字段 → 自动清空其余两个字段
     elif changed_table == viewer.tableWidget_trail_data:
-        header_item = changed_table.horizontalHeaderItem(col)
-        col_name = header_item.text().strip() if header_item else ""
-        side = None
-
-        if "壳程" in col_name:
-            side = "壳程"
-        elif "管程" in col_name:
-            side = "管程"
+        # 容器检测表头显示为「检测比例%」等，逻辑名在 UserRole（如 壳程_检测比例）
+        col_name = resolve_header_field_name(changed_table, col)
+        side = get_trail_side_from_field(col_name)
 
         # 自动补齐技术等级与合格级别
-        if col_name in [f"{side}_检测比例"] and side:
+        if side and col_name == f"{side}_检测比例":
             did_fill = autofill_trail_test_grade(changed_table, row, side, undo_stack)
             if did_fill:
                 show_info_tip(viewer, trail_ratio_autofill_tip(viewer, side))
@@ -5468,8 +5604,7 @@ def handle_cross_table_triggers(viewer: QWidget, changed_table: QTableWidget, ro
                     f"{side}_合格级别": [f"{side}_技术等级", f"{side}_检测比例"]
                 }
                 for other_col_name in related_cols.get(col_name, []):
-                    col_idx = next((i for i in range(changed_table.columnCount())
-                                    if changed_table.horizontalHeaderItem(i).text().strip() == other_col_name), None)
+                    col_idx = find_trail_column_by_field(changed_table, other_col_name)
                     if col_idx is not None:
                         target_item = changed_table.item(row, col_idx)
                         if target_item and target_item.text().strip():
@@ -6105,8 +6240,7 @@ class TrailTableComboDelegate(QStyledItemDelegate):
         viewer = getattr(table, "viewer", None)
         if viewer:
             row = index.row()
-            header_item = table.horizontalHeaderItem(col)
-            column_name = header_item.text().strip() if header_item else ""
+            column_name = resolve_header_field_name(table, col)
             from modules.condition_input.funcs.funcs_cdt_input import dispatch_cell_validation, \
                 handle_cross_table_triggers
 

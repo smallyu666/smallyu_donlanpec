@@ -21,6 +21,9 @@ from modules.condition_input.funcs.funcs_cdt_input import (
     highlight_entire_row,
     set_table_corner_label,
     sync_table_row_height,
+    revalidate_custom_trial_pressure_for_table,
+    is_container_viewer,
+    get_product_type_from_db,
 )
 
 # PARAM_UNITS = ["MPa", "℃", "MPa", "℃", "℃", "MPa"]  # 按参数名称顺序给单位
@@ -151,20 +154,12 @@ class MultiConditionsDialog(QDialog):
         self._multi_id_safe_threshold = 0
         self._multi_id_legacy_high = False
 
-        # --- 新增：容器模式判定与参数动态切换 ---
-        self.is_container = False
-        if parent and hasattr(parent, 'product_type') and parent.product_type and "容器" in parent.product_type:
-            self.is_container = True
-        elif parent and hasattr(parent, 'tableWidget_design_data'):
+        # 容器模式：仅依据产品类型判定（勿用参数ID>=35，换热器常规参数含ID=40会误判）
+        self.is_container = is_container_viewer(parent)
+        if not self.is_container and product_id:
             try:
-                for r in range(parent.tableWidget_design_data.rowCount()):
-                    it = parent.tableWidget_design_data.item(r, 0)
-                    if it:
-                        user_data = it.data(Qt.UserRole)
-                        val = str(user_data) if user_data is not None else it.text().strip()
-                        if val.isdigit() and int(val) >= 35:
-                            self.is_container = True
-                            break
+                prod_type = get_product_type_from_db(product_id) or ""
+                self.is_container = "容器" in prod_type
             except Exception:
                 pass
         
@@ -557,31 +552,36 @@ class MultiConditionsDialog(QDialog):
     #         self.tableWidget.setItem(r, 2, QTableWidgetItem(str(gc_val)))
 
 
+    def _apply_gongkuang1_to_main_table(self):
+        """工况1：将缓存回写主界面设计数据表，并重验自定义耐压试验压力（卧/立）。"""
+        parent = self.parent()
+        if not parent or not hasattr(parent, "tableWidget_design_data"):
+            return
+        table = parent.tableWidget_design_data
+        gongkuang_no = 1
+        for pname in self.PARAM_NAMES:
+            kc_val, gc_val = self._data_cache[gongkuang_no][pname]
+            for row in range(table.rowCount()):
+                name_item = table.item(row, 1)
+                if name_item and name_item.text().strip() == pname:
+                    item_kc = QTableWidgetItem(kc_val)
+                    item_kc.setTextAlignment(Qt.AlignCenter)
+                    table.setItem(row, 3, item_kc)
+
+                    if not getattr(self, "is_container", False):
+                        item_gc = QTableWidgetItem(gc_val)
+                        item_gc.setTextAlignment(Qt.AlignCenter)
+                        table.setItem(row, 4, item_gc)
+                    break
+        revalidate_custom_trial_pressure_for_table(parent, table)
+
     def save_current_gongkuang(self):
         if getattr(self, "_readonly_local_files", False):
             return
         gongkuang_no = self.current_gongkuang
         self._save_to_cache(gongkuang_no)
         if gongkuang_no == 1:
-            # ✅ 工况1：只回填界面，不写数据库
-            parent = self.parent()
-            if parent and hasattr(parent, "tableWidget_design_data"):
-                table = parent.tableWidget_design_data
-                for pname in self.PARAM_NAMES:
-                    kc_val, gc_val = self._data_cache[gongkuang_no][pname]
-                    # 找到界面上对应行
-                    for row in range(table.rowCount()):
-                        name_item = table.item(row, 1)
-                        if name_item and name_item.text().strip() == pname:
-                            # ✅ 居中显示
-                            item_kc = QTableWidgetItem(kc_val)
-                            item_kc.setTextAlignment(Qt.AlignCenter)
-                            table.setItem(row, 3, item_kc)
-
-                            if not getattr(self, "is_container", False):
-                                item_gc = QTableWidgetItem(gc_val)
-                                item_gc.setTextAlignment(Qt.AlignCenter)
-                                table.setItem(row, 4, item_gc)
+            self._apply_gongkuang1_to_main_table()
             QMessageBox.information(self, "保存成功", f"工况{gongkuang_no} 已保存")
             return
 
@@ -655,23 +655,7 @@ class MultiConditionsDialog(QDialog):
         self._save_to_cache(gongkuang_no)
 
         if gongkuang_no == 1:
-            # 工况1：回填界面，不写数据库
-            parent = self.parent()
-            if parent and hasattr(parent, "tableWidget_design_data"):
-                table = parent.tableWidget_design_data
-                for pname in self.PARAM_NAMES:
-                    kc_val, gc_val = self._data_cache[gongkuang_no][pname]
-                    for row in range(table.rowCount()):
-                        name_item = table.item(row, 1)
-                        if name_item and name_item.text().strip() == pname:
-                            item_kc = QTableWidgetItem(kc_val)
-                            item_kc.setTextAlignment(Qt.AlignCenter)
-                            table.setItem(row, 3, item_kc)
-
-                            if not getattr(self, "is_container", False):
-                                item_gc = QTableWidgetItem(gc_val)
-                                item_gc.setTextAlignment(Qt.AlignCenter)
-                                table.setItem(row, 4, item_gc)
+            self._apply_gongkuang1_to_main_table()
             return
 
         # 工况2/3：写数据库

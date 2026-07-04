@@ -1609,6 +1609,89 @@ def on_product_form_changed(text):
     update_container_developing_tip()
 
 
+def _resolve_product_folder_abs_for_definition(product_id, row: int) -> str:
+    """
+    产品定义保存时解析本地产品文件夹绝对路径。
+    优先使用活动表中已登记且磁盘上仍存在的路径；否则按表格与项目路径规则计算（与 save_new_product 一致）。
+    """
+    if product_id:
+        try:
+            conn_act = common_usage.get_mysql_connection_active()
+            cur_act = conn_act.cursor()
+            cur_act.execute(
+                "SELECT 产品文件夹绝对路径 FROM 产品设计活动表 WHERE 产品ID = %s",
+                (product_id,),
+            )
+            act_row = cur_act.fetchone()
+            cur_act.close()
+            conn_act.close()
+            stored = ""
+            if act_row:
+                if isinstance(act_row, dict):
+                    stored = (act_row.get("产品文件夹绝对路径") or "").strip()
+                else:
+                    stored = (act_row[0] or "").strip()
+            if stored:
+                stored_abs = os.path.normpath(os.path.abspath(stored))
+                if os.path.isdir(stored_abs):
+                    print(f"[confirm_product_definition] 使用活动表已有路径: {stored_abs}")
+                    return stored_abs
+                print(f"[confirm_product_definition] 活动表路径不存在，按表格重算: {stored_abs}")
+        except Exception as e:
+            print(f"[confirm_product_definition] 读取活动表路径失败: {e}")
+
+    if row < 0:
+        return ""
+
+    try:
+        _conn_p = common_usage.get_mysql_connection_project()
+        _cur_p = _conn_p.cursor()
+        _cur_p.execute(
+            "SELECT 项目保存路径 FROM 项目需求表 WHERE 项目ID = %s",
+            (bianl.current_project_id,),
+        )
+        _r_p = _cur_p.fetchone()
+        _cur_p.close()
+        _conn_p.close()
+        if not (_r_p and _r_p.get("项目保存路径")):
+            return ""
+
+        project_root = os.path.join(
+            _r_p["项目保存路径"],
+            f"{bianl.owner_input.text().strip()}_{bianl.project_name_input.text().strip()}",
+        )
+        serial_raw = (
+            (bianl.product_table.item(row, 0).text() or "").strip()
+            if bianl.product_table.item(row, 0)
+            else ""
+        )
+        serial = serial_raw.zfill(3) if serial_raw and serial_raw.isdigit() else serial_raw
+        name = (
+            (bianl.product_table.item(row, 1).text() or "").strip()
+            if bianl.product_table.item(row, 1)
+            else ""
+        )
+        position = (
+            (bianl.product_table.item(row, 2).text() or "").strip()
+            if bianl.product_table.item(row, 2)
+            else ""
+        )
+        number = (
+            (bianl.product_table.item(row, 3).text() or "").strip()
+            if bianl.product_table.item(row, 3)
+            else ""
+        )
+        folder_name = product_confirm_qianzhi.build_pd_folder_name(serial, name, position, number)
+        if not folder_name:
+            return ""
+        calculated = os.path.abspath(os.path.join(project_root, folder_name))
+        print(f"[confirm_product_definition] 按表格计算路径: {calculated}")
+        return calculated
+    except Exception as e:
+        print(f"[confirm_product_definition] 按表格计算路径失败: {e}")
+        return ""
+
+
 def confirm_product_definition():
     """产品定义区域 - 确认保存（仅首次保存弹窗并锁死 类型/形式；之后保存不再弹窗）"""
     # 1) 基本校验
@@ -1617,6 +1700,16 @@ def confirm_product_definition():
     if not bianl.product_id:
         print("当前产品未保存，无法进行定义操作。")
         QMessageBox.critical(bianl.main_window, "错误", "当前产品未保存，无法进行定义操作。")
+        return False
+
+    # 方案 B：产品信息处于 edit（已改表格、未点产品信息确认）时，不允许保存产品定义
+    row_status = bianl.product_table_row_status.get(row, {})
+    if isinstance(row_status, dict) and row_status.get("status") == "edit":
+        QMessageBox.warning(
+            bianl.main_window,
+            "请先保存产品信息",
+            "产品信息已修改但尚未保存，请先点击「产品信息」区域的保存按钮，再保存产品定义。",
+        )
         return False
 
     # 2) 读取 UI 字段
@@ -1716,32 +1809,9 @@ def confirm_product_definition():
         conn2 = common_usage.get_mysql_connection_active()
         cursor2 = conn2.cursor()
 
-        # 计算当前产品的文件夹绝对路径（与表格行一致）
+        # 方案 A：优先使用活动表已有且存在的路径，否则按表格规则计算
         row = bianl.product_table.currentRow()
-        product_folder_abs = ""
-        try:
-            _conn_p = common_usage.get_mysql_connection_project()
-            _cur_p = _conn_p.cursor()
-            _cur_p.execute("SELECT 项目保存路径 FROM 项目需求表 WHERE 项目ID = %s", (bianl.current_project_id,))
-            _r_p = _cur_p.fetchone()
-            _cur_p.close()
-            _conn_p.close()
-            if _r_p and _r_p.get("项目保存路径"):
-                project_root = os.path.join(
-                    _r_p["项目保存路径"],
-                    f"{bianl.owner_input.text().strip()}_{bianl.project_name_input.text().strip()}"
-                )
-                serial_raw = (bianl.product_table.item(row, 0).text() or "").strip() if bianl.product_table.item(row, 0) else ""
-                # 序号与新建产品时一致：纯数字时按 3 位补零（006），避免 06 导致路径少一位
-                serial = serial_raw.zfill(3) if serial_raw and serial_raw.isdigit() else serial_raw
-                name = (bianl.product_table.item(row, 1).text() or "").strip() if bianl.product_table.item(row, 1) else ""
-                position = (bianl.product_table.item(row, 2).text() or "").strip() if bianl.product_table.item(row, 2) else ""
-                number = (bianl.product_table.item(row, 3).text() or "").strip() if bianl.product_table.item(row, 3) else ""
-                folder_name = product_confirm_qianzhi.build_pd_folder_name(serial, name, position, number)
-                if folder_name:
-                    product_folder_abs = os.path.abspath(os.path.join(project_root, folder_name))
-        except Exception as _e_path:
-            print(f"[confirm_product_definition] 计算产品文件夹路径失败: {_e_path}")
+        product_folder_abs = _resolve_product_folder_abs_for_definition(bianl.product_id, row)
 
         upsert_sql = """
             INSERT INTO 产品设计活动表
