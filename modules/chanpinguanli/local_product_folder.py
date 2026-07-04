@@ -25,9 +25,64 @@ from modules.condition_input.funcs.funcs_cdt_input import (
 
 _CHANPINGUANLI_DIR = os.path.dirname(os.path.abspath(__file__))
 _TEMPLATE_CONDITION = os.path.join(_CHANPINGUANLI_DIR, "条件输入数据表.xlsx")
+_TEMPLATE_CONTAINER_CONDITION = os.path.join(_CHANPINGUANLI_DIR, "容器条件输入数据表.xlsx")
 _TEMPLATE_NOZZLE = os.path.join(_CHANPINGUANLI_DIR, "管口导入模板.xlsx")
 
-_REQUIRED_FILES = ("pro_id.csv", "管口导入模板.xlsx", "条件输入数据表.xlsx")
+_BASE_REQUIRED_FILES = ("pro_id.csv", "条件输入数据表.xlsx")
+_NOZZLE_REQUIRED_FILE = "管口导入模板.xlsx"
+
+
+def _is_container_product_type(product_type: str) -> bool:
+    """与条件输入、产品定义保存逻辑一致：立式/卧式容器及含「容器」的类型。"""
+    product_type = (product_type or "").strip()
+    if not product_type:
+        return False
+    if product_type in ("容器", "立式容器", "卧式容器"):
+        return True
+    return "容器" in product_type
+
+
+def _get_product_type(product_id) -> str:
+    """从产品需求表读取产品类型；失败时返回空串。"""
+    try:
+        from modules.chanpinguanli import common_usage
+
+        conn = common_usage.get_mysql_connection_product()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT `产品类型` FROM `产品需求表` WHERE `产品ID` = %s LIMIT 1",
+            (product_id,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if not row:
+            return ""
+        if isinstance(row, dict):
+            return (row.get("产品类型") or "").strip()
+        return (row[0] or "").strip()
+    except Exception as e:
+        print(f"[_get_product_type] {e}")
+        return ""
+
+
+def _condition_template_path(product_type: str) -> str:
+    """按产品类型返回程序内条件输入 xlsx 模板路径。"""
+    if _is_container_product_type(product_type):
+        if os.path.isfile(_TEMPLATE_CONTAINER_CONDITION):
+            return _TEMPLATE_CONTAINER_CONDITION
+        print(
+            f"[_condition_template_path] 未找到容器模板，回退通用模板: {_TEMPLATE_CONTAINER_CONDITION}"
+        )
+    return _TEMPLATE_CONDITION
+
+
+def _required_local_files(product_type: str) -> tuple:
+    """容器产品不要求管口导入模板。"""
+    files = list(_BASE_REQUIRED_FILES)
+    if not _is_container_product_type(product_type):
+        files.insert(1, _NOZZLE_REQUIRED_FILE)
+    return tuple(files)
 
 # 0509新修改--产品恢复时同时恢复项目id.csv
 def _ensure_project_root_id_csv(product_id) -> str:
@@ -114,14 +169,17 @@ class ConditionLocalRestoreStub(QWidget):
 def list_missing_local_product_files(product_id):
     """
     返回 (missing_list, folder_or_None)。
-    missing_list 为空表示三文件齐全且 pro_id 内容正确。
+    missing_list 为空表示必需本地文件齐全且 pro_id 内容正确。
     """
     folder, err = get_expected_product_local_folder(product_id)
     if not folder:
         return ([f"无法解析文件夹（{err}）"] if err else ["无法解析文件夹"]), None
 
+    product_type = _get_product_type(product_id)
+    required_files = _required_local_files(product_type)
+
     missing = []
-    for name in _REQUIRED_FILES:
+    for name in required_files:
         path = os.path.join(folder, name)
         if not os.path.isfile(path):
             missing.append(name)
@@ -143,7 +201,8 @@ def list_missing_local_product_files(product_id):
 
 def restore_local_product_files(parent, product_id) -> tuple:
     """
-    重建目录与三文件；有条件输入库数据时填充 条件输入数据表.xlsx。
+    重建目录与必需本地文件；有条件输入库数据时填充 条件输入数据表.xlsx。
+    容器产品使用容器条件输入模板，且不恢复管口导入模板。
     返回 (success: bool, message: str)
     """
     pid = product_id
@@ -151,9 +210,13 @@ def restore_local_product_files(parent, product_id) -> tuple:
     if not folder:
         return False, err or "无法解析产品本地文件夹"
 
-    if not os.path.isfile(_TEMPLATE_CONDITION):
-        return False, f"缺少程序内模板：{_TEMPLATE_CONDITION}"
-    if not os.path.isfile(_TEMPLATE_NOZZLE):
+    product_type = _get_product_type(pid)
+    is_container = _is_container_product_type(product_type)
+    condition_template = _condition_template_path(product_type)
+
+    if not os.path.isfile(condition_template):
+        return False, f"缺少程序内模板：{condition_template}"
+    if not is_container and not os.path.isfile(_TEMPLATE_NOZZLE):
         return False, f"缺少程序内模板：{_TEMPLATE_NOZZLE}"
 
     try:
@@ -162,12 +225,13 @@ def restore_local_product_files(parent, product_id) -> tuple:
         return False, f"无法创建文件夹：{e}"
 
     xlsx_path = os.path.join(folder, "条件输入数据表.xlsx")
-    nozzle_path = os.path.join(folder, "管口导入模板.xlsx")
     pro_path = os.path.join(folder, "pro_id.csv")
 
     try:
-        shutil.copy2(_TEMPLATE_CONDITION, xlsx_path)
-        shutil.copy2(_TEMPLATE_NOZZLE, nozzle_path)
+        shutil.copy2(condition_template, xlsx_path)
+        if not is_container:
+            nozzle_path = os.path.join(folder, _NOZZLE_REQUIRED_FILE)
+            shutil.copy2(_TEMPLATE_NOZZLE, nozzle_path)
         with open(pro_path, "w", encoding="utf-8") as f:
             f.write(str(pid).strip())
     except Exception as e:
@@ -219,7 +283,8 @@ def maybe_prompt_local_product_recovery(parent, product_id, definition_status: s
             for m in missing:
                 if folder and not str(m).startswith("无法"):
                     base = str(m).split("（", 1)[0].strip()
-                    if base in _REQUIRED_FILES or base == "pro_id.csv":
+                    known = set(_BASE_REQUIRED_FILES) | {_NOZZLE_REQUIRED_FILE}
+                    if base in known or base == "pro_id.csv":
                         lines.append(os.path.normpath(os.path.join(folder, base)))
                     else:
                         lines.append(m)
