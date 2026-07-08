@@ -9,7 +9,12 @@ from PyQt5.QtGui import QBrush, QColor, QPen, QIcon, QPixmap, QFont, QPainterPat
 import sys
 import os
 import pymysql
-from modules.buguan.buguan_ziyong.variable import update_axial_basic_params, axial_basic_params
+from modules.buguan.buguan_ziyong.variable import (
+    update_axial_basic_params,
+    axial_basic_params,
+    normalize_lb_baffle_od_param_row,
+)
+from modules.buguan.buguan_ziyong.buguan_param_table_style import apply_buguan_param_table_style
 
 
 def create_activity_connection():
@@ -204,6 +209,10 @@ class AutoAddDialog(QDialog):
         self.combo_element.currentTextChanged.connect(self._update_orientation_options)
         # 初始化一次
         self._update_orientation_options(self.combo_element.currentText())
+
+        apply_buguan_param_table_style(
+            self.table, value_column_index=0, extra_value_columns=[1, 2]
+        )
 
         layout.addWidget(self.table)
 
@@ -400,8 +409,8 @@ class AxialDesignPage(QWidget):
         self.tube_table.setHorizontalHeaderLabels([
             "参数名", "参数值", "单位",
         ])
-        # 公共样式（含列宽策略）
-        self._init_table_style(self.tube_table)
+        # 公共样式（含列宽策略）+ 布管参数表圆角输入框
+        self._init_table_style(self.tube_table, value_column_index=1)
 
         # 初始列宽（可根据实际效果自行调整）
         self.tube_table.setColumnWidth(0, 320)  # 参数名
@@ -431,8 +440,10 @@ class AxialDesignPage(QWidget):
             "元件厚度/mm",
             "元件类型",
         ])
-        # 公共样式（含列宽策略）
-        self._init_table_style(self.component_table)
+        # 公共样式（含列宽策略）+ 距离/厚度列圆角输入框
+        self._init_table_style(
+            self.component_table, value_column_index=1, extra_value_columns=[2]
+        )
 
         # 初始列宽（可根据实际效果自行调整）
         self.component_table.setColumnWidth(0, 60)  # 序号
@@ -582,7 +593,7 @@ class AxialDesignPage(QWidget):
                 "公称直径 DN",
                 "换热管公称长度 LN",
                 "换热管外径 do",
-                "折流板外径",
+                "折流/支持板外径",
                 "折流板切口方向",
                 "折流板要求切口率",
             }
@@ -596,6 +607,7 @@ class AxialDesignPage(QWidget):
                 try:
                     name_item = table.item(row, 1)
                     param_name = name_item.text().strip() if name_item else ""
+                    param_name = normalize_lb_baffle_od_param_row(param_name)
                     if param_name not in params_to_fetch:
                         continue
                     value_widget = None
@@ -960,11 +972,9 @@ class AxialDesignPage(QWidget):
                                                          beam_height)
                 self._draw_innermost_heat_exchange_tubes(x_left_center, x_right_center, y_center - 50, beam_length,
                                                          beam_height)
-                # 将两根内侧换热管在水平方向向右各延长 semi_radius
-                self._extend_innermost_tube_to_right(x_left_center, x_right_center, y_center + 50,
-                                                     beam_length, beam_height, semi_radius)
-                self._extend_innermost_tube_to_right(x_left_center, x_right_center, y_center - 50,
-                                                     beam_length, beam_height, semi_radius)
+                # U型管在4/6管程下仍保持U型端部表现（半圆），不切换为直管视觉
+                self._draw_innermost_semi_circle(x_left_center, x_right_center, y_center, 50)
+                self._draw_innermost_semi_circle(x_left_center, x_right_center, y_center, semi_radius)
             else:
                 # 最外侧换热管，2个
                 self._draw_outermost_heat_exchange_tubes(x_left_center, x_right_center, y_center,
@@ -1909,10 +1919,10 @@ class AxialDesignPage(QWidget):
         except Exception:
             axial_basic_params = {}
 
-        # 折流板外径 dz
+        # 折流/支持板外径 dz
         dz = None
         try:
-            dz_text = str(axial_basic_params.get("折流板外径", "")).strip()
+            dz_text = str(axial_basic_params.get("折流/支持板外径", "")).strip()
             if dz_text:
                 dz = float(dz_text)
         except Exception:
@@ -2053,7 +2063,7 @@ class AxialDesignPage(QWidget):
 
         dz = None
         try:
-            dz_text = str(axial_basic_params.get("折流板外径", "")).strip()
+            dz_text = str(axial_basic_params.get("折流/支持板外径", "")).strip()
             if dz_text:
                 dz = float(dz_text)
         except Exception:
@@ -2461,12 +2471,11 @@ class AxialDesignPage(QWidget):
             self.initial_draw_layout()
 
     @staticmethod
-    def _init_table_style(table: QTableWidget):
-        # 整体调小表格字体
-        base_font = table.font()
-        base_font.setPointSize(max(base_font.pointSize() - 1, 8))
-        table.setFont(base_font)
-
+    def _init_table_style(
+        table: QTableWidget,
+        value_column_index=None,
+        extra_value_columns=None,
+    ):
         header = table.horizontalHeader()
         # 列宽可交互调整，模仿 My_Piping 中左侧参数表的行为
         header.setSectionResizeMode(QHeaderView.Interactive)
@@ -2509,8 +2518,14 @@ class AxialDesignPage(QWidget):
         table.setEditTriggers(QAbstractItemView.AllEditTriggers)
         table.setSelectionBehavior(QTableWidget.SelectRows)
         table.setSelectionMode(QTableWidget.SingleSelection)
-        table.setAlternatingRowColors(True)
         table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        if value_column_index is not None:
+            apply_buguan_param_table_style(
+                table,
+                value_column_index=value_column_index,
+                extra_value_columns=extra_value_columns,
+            )
 
 
 if __name__ == "__main__":

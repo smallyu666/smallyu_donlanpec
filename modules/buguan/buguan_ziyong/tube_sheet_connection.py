@@ -2,12 +2,62 @@
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QFrame,
     QLineEdit, QGridLayout, QMessageBox, QScrollBar, QTableWidget,
-    QTableWidgetItem, QHeaderView, QDialog, QApplication
+    QTableWidgetItem, QHeaderView, QDialog, QApplication, QPushButton, QAbstractItemView
 )
-from PyQt5.QtGui import QPixmap
-from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtGui import QPixmap, QPainter, QColor, QBrush
+from PyQt5.QtCore import Qt, QSize, pyqtSignal, QTimer
 import pymysql
 from pathlib import Path
+
+from .buguan_param_table_style import apply_buguan_param_table_style
+
+
+class ToggleSwitch(QWidget):
+    """一个轻量自绘开关：checked=True 显示蓝色，False 显示灰色。"""
+
+    toggled = pyqtSignal(bool)
+
+    def __init__(self, parent=None, checked=True):
+        super().__init__(parent)
+        self._checked = bool(checked)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(52, 28)
+
+    def isChecked(self) -> bool:
+        return bool(self._checked)
+
+    def setChecked(self, checked: bool):
+        checked = bool(checked)
+        if self._checked == checked:
+            return
+        self._checked = checked
+        self.update()
+        self.toggled.emit(self._checked)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.setChecked(not self._checked)
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        w = self.width()
+        h = self.height()
+        radius = h / 2.0
+        knob_d = h - 4
+        knob_r = knob_d / 2.0
+
+        bg = QColor("#2f80ff") if self._checked else QColor("#cfcfcf")
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(bg))
+        painter.drawRoundedRect(0, 0, w, h, radius, radius)
+
+        knob_x = (w - knob_d - 2) if self._checked else 2
+        painter.setBrush(QBrush(QColor("#ffffff")))
+        painter.drawEllipse(int(knob_x), 2, int(knob_d), int(knob_d))
+        painter.end()
 
 
 def create_component_connection():
@@ -112,6 +162,8 @@ class TubeSheetConnectionPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent = parent
+        # 用户只读开关：True=只读（禁用一切操作），False=按原逻辑
+        self._tsc_user_readonly = False
         self.current_params = []
         self.current_image_path = ""
         self.current_dir = Path(__file__).parent.resolve()
@@ -125,8 +177,18 @@ class TubeSheetConnectionPage(QWidget):
         self.image_labels = []
         self.thumbnail_size = QSize(320, 220)
         self.setup_ui()
-        # 页面初始化后，尝试自动选中已保存的管板连接节点
-        self.auto_select_saved_connection()
+        self._sync_tsc_widgets_enabled()
+        # 页面创建后延迟恢复（productID 可能稍后才就绪）
+        QTimer.singleShot(100, lambda: self._restore_saved_connection_state())
+
+    def showEvent(self, event):
+        """每次进入管板连接页时恢复上次保存的节点与参数表。"""
+        super().showEvent(event)
+        try:
+            if not getattr(self, "_tsc_user_readonly", False):
+                self._restore_saved_connection_state()
+        except Exception:
+            pass
 
     def get_product_id(self):
         try:
@@ -137,20 +199,41 @@ class TubeSheetConnectionPage(QWidget):
         except Exception:
             return None
 
-    def auto_select_saved_connection(self):
-        """根据产品ID自动选中已保存的管板连接方式和管板类型对应的图片"""
+    def _find_label_for_saved_connection(self, connection_type, tube_sheet_type):
+        """在图片列表中查找与库中记录匹配的缩略图。"""
+        conn_type = str(connection_type or "").strip()
+        ts_type = str(tube_sheet_type).strip() if tube_sheet_type is not None else ""
+        if not conn_type or not ts_type:
+            return None
+
+        for label in self.image_labels:
+            if (
+                str(getattr(label, "connection_type", "") or "").strip() == conn_type
+                and str(getattr(label, "tube_sheet_type", "") or "").strip() == ts_type
+            ):
+                return label
+
+        # 仅连接方式匹配时，退回该方式下第一张图
+        for label in self.image_labels:
+            if str(getattr(label, "connection_type", "") or "").strip() == conn_type:
+                return label
+        return None
+
+    def _restore_saved_connection_state(self, retry=0):
+        """根据产品ID恢复已保存的管板连接节点及右侧参数表。"""
+        if not self.image_labels:
+            if retry < 8:
+                QTimer.singleShot(200, lambda: self._restore_saved_connection_state(retry + 1))
+            return
+
         product_id = self.get_product_id()
         if not product_id:
-            # 如果没有产品ID，直接选择第一张图片作为默认
-            if self.image_labels:
-                self.select_image(self.image_labels[0])
+            if retry < 8:
+                QTimer.singleShot(200, lambda: self._restore_saved_connection_state(retry + 1))
             return
 
         conn = create_product_connection()
         if not conn:
-            # 如果无法连接产品库，同样选择第一张图片作为默认
-            if self.image_labels:
-                self.select_image(self.image_labels[0])
             return
 
         try:
@@ -161,47 +244,37 @@ class TubeSheetConnectionPage(QWidget):
                 WHERE 产品ID = %s
                 LIMIT 1
                 """
-                print(f"[调试] 自动选择已保存节点 - SQL: {sql}")
                 cur.execute(sql, (product_id,))
                 row = cur.fetchone()
-                if not row:
-                    print("[调试] 自动选择已保存节点 - 未找到该产品ID的记录")
-                    # 未找到任何记录，选中第一张图片作为默认
-                    if self.image_labels:
-                        self.select_image(self.image_labels[0])
-                    return
 
-                connection_type = row.get("管板连接方式") if isinstance(row, dict) else row[0]
-                tube_sheet_type = row.get("管板类型") if isinstance(row, dict) else row[1]
-                print(f"[调试] 自动选择已保存节点 - 连接方式: {connection_type}, 管板类型: {tube_sheet_type}")
+            if not row:
+                print("[tube_sheet_connection] 无已保存记录，保持当前界面")
+                return
 
-                if not connection_type or tube_sheet_type is None:
-                    # 记录不完整，同样退回选中第一张图片
-                    if self.image_labels:
-                        self.select_image(self.image_labels[0])
-                    return
+            connection_type = row.get("管板连接方式") if isinstance(row, dict) else row[0]
+            tube_sheet_type = row.get("管板类型") if isinstance(row, dict) else row[1]
+            print(
+                f"[tube_sheet_connection] 恢复保存状态: "
+                f"连接方式={connection_type}, 管板类型={tube_sheet_type}"
+            )
 
-                target_label = None
-                for label in self.image_labels:
-                    if (getattr(label, 'connection_type', None) == connection_type and
-                            getattr(label, 'tube_sheet_type', None) == str(tube_sheet_type)):
-                        target_label = label
-                        break
-
-                if target_label is not None:
-                    # 复用现有的选择逻辑
-                    self.select_image(target_label)
-                else:
-                    print("[调试] 自动选择已保存节点 - 未在图片列表中找到匹配的标签")
-                    # 有记录但找不到对应图片时，也退回选中第一张图片
-                    if self.image_labels:
-                        self.select_image(self.image_labels[0])
+            target_label = self._find_label_for_saved_connection(
+                connection_type, tube_sheet_type
+            )
+            if target_label is not None:
+                self.select_image(target_label, restoring=True)
+            else:
+                print("[tube_sheet_connection] 未找到匹配图片，不覆盖当前选择")
         except Exception as e:
-            print(f"[tube_sheet_connection] 自动选择已保存节点时发生错误: {str(e)}")
+            print(f"[tube_sheet_connection] 恢复保存状态失败: {e}")
             import traceback
             traceback.print_exc()
         finally:
             conn.close()
+
+    def auto_select_saved_connection(self):
+        """兼容旧调用：委托给统一恢复逻辑。"""
+        self._restore_saved_connection_state()
 
     def _get_param_from_parent(self, param_name):
         """从父窗口参数表读取指定参数的值"""
@@ -262,8 +335,25 @@ class TubeSheetConnectionPage(QWidget):
 
     def setup_ui(self):
         """主布局"""
-        outer_layout = QHBoxLayout(self)
-        outer_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(12)
+
+        # 顶部只读开关（左上角，开=可操作；关=只读）
+        top_bar = QHBoxLayout()
+        top_bar.setSpacing(10)
+
+        self.tsc_readonly_title = QLabel("管板连接")
+        self.tsc_readonly_title.setStyleSheet("font-size: 18px; font-weight: 600; color: #222;")
+        top_bar.addWidget(self.tsc_readonly_title)
+
+        self.tsc_readonly_switch = ToggleSwitch(checked=True)
+        self.tsc_readonly_switch.toggled.connect(self._on_tsc_toggle_readonly)
+        top_bar.addWidget(self.tsc_readonly_switch)
+        top_bar.addStretch()
+        main_layout.addLayout(top_bar)
+
+        outer_layout = QHBoxLayout()
         outer_layout.setSpacing(30)
 
         left_outer = QVBoxLayout()
@@ -387,7 +477,7 @@ class TubeSheetConnectionPage(QWidget):
         self.param_frame = QFrame()
         self.param_frame.setStyleSheet("""
             QFrame {
-                background-color: #f9f9f9;
+                background-color: #ffffff;
                 border-radius: 8px;
             }
         """)
@@ -424,11 +514,15 @@ class TubeSheetConnectionPage(QWidget):
         # 在表格显示后设置初始列宽
         self.param_table.showEvent = lambda event: set_initial_column_widths()
 
+        apply_buguan_param_table_style(self.param_table, value_column_index=1)
+
         self.param_layout.addWidget(self.param_table)
 
         right_outer.addWidget(self.param_frame)
 
         outer_layout.addLayout(right_outer, 7)  # 右侧参数区：35% (7/20)
+
+        main_layout.addLayout(outer_layout)
 
         # ✅ 统一滚动条样式（灰色风格）
         scrollbar_style = """
@@ -460,6 +554,8 @@ class TubeSheetConnectionPage(QWidget):
 
     def _make_label_click_handler(self, lbl):
         def handler(event):
+            if getattr(self, "_tsc_user_readonly", False):
+                return
             if event is None or event.button() == Qt.LeftButton:
                 self.select_image(lbl)
 
@@ -467,6 +563,8 @@ class TubeSheetConnectionPage(QWidget):
 
     def _make_label_double_click_handler(self, lbl):
         def handler(event):
+            if getattr(self, "_tsc_user_readonly", False):
+                return
             if event is None or event.button() == Qt.LeftButton:
                 # 双击时在进行参数选择的基础上，打开图片预览弹窗
                 self.select_image(lbl)
@@ -480,6 +578,65 @@ class TubeSheetConnectionPage(QWidget):
         """打开图片预览弹窗，显示可缩放大图"""
         dlg = ImagePreviewDialog(image_path, self)
         dlg.exec_()
+
+    def _reload_tsc_params_for_selected_image(self, force=False):
+        """按当前选中的连接示意图重新填充右侧参数表。"""
+        try:
+            if not hasattr(self, "param_table") or self.param_table is None:
+                return
+            if not force and self.param_table.rowCount() > 0:
+                return
+            for label in self.image_labels:
+                if label.property("selected"):
+                    self.select_image(label, restoring=True)
+                    return
+            if self.image_labels:
+                self.select_image(self.image_labels[0], restoring=True)
+        except Exception:
+            pass
+
+    def _sync_tsc_widgets_enabled(self):
+        """只读时冻结整页（不可切换示意图、不可改参数）。"""
+        readonly = bool(getattr(self, "_tsc_user_readonly", False))
+        interactive = not readonly
+        try:
+            if hasattr(self, "image_scroll") and self.image_scroll is not None:
+                self.image_scroll.setEnabled(interactive)
+        except Exception:
+            pass
+        try:
+            for lbl in getattr(self, "image_labels", []) or []:
+                lbl.setEnabled(interactive)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "param_frame") and self.param_frame is not None:
+                self.param_frame.setEnabled(interactive)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "param_table") and self.param_table is not None:
+                self.param_table.setEnabled(interactive)
+                if readonly:
+                    self.param_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+                else:
+                    self.param_table.setEditTriggers(
+                        QAbstractItemView.DoubleClicked
+                        | QAbstractItemView.SelectedClicked
+                        | QAbstractItemView.EditKeyPressed
+                    )
+        except Exception:
+            pass
+
+    def _on_tsc_toggle_readonly(self, is_operation_on: bool):
+        """顶部开关。is_operation_on=True 表示可操作；False 表示只读（整页冻结）。"""
+        self._tsc_user_readonly = (not bool(is_operation_on))
+        self._sync_tsc_widgets_enabled()
+        if not self._tsc_user_readonly:
+            try:
+                self._reload_tsc_params_for_selected_image(force=False)
+            except Exception:
+                pass
 
     def infer_tube_sheet_type(self, filename):
         f = filename.lower()
@@ -500,7 +657,10 @@ class TubeSheetConnectionPage(QWidget):
             result = filename
         return result
 
-    def select_image(self, label):
+    def select_image(self, label, restoring=False):
+        # 只读时禁止手动点选；程序化恢复保存状态时仍加载参数表
+        if not restoring and getattr(self, "_tsc_user_readonly", False):
+            return
         if not hasattr(label, 'connection_type') or not hasattr(label, 'tube_sheet_type'):
             return
 

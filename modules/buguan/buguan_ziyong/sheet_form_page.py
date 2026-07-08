@@ -4,12 +4,60 @@
 import os
 import traceback
 # 导入 QTimer
-from PyQt5.QtCore import Qt, QSize, QTimer, QRect
+from PyQt5.QtCore import Qt, QSize, QTimer, QRect, pyqtSignal
 from PyQt5.QtGui import QPixmap, QFont, QIcon, QPainter, QColor, QBrush
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea,
                              QGridLayout, QFrame, QListWidget, QListWidgetItem, QLineEdit, QComboBox, QSizePolicy,
-                             QTableWidget, QTableWidgetItem, QHeaderView, QDialog, QApplication)
+                             QTableWidget, QTableWidgetItem, QHeaderView, QDialog, QApplication, QStyledItemDelegate,
+                             QPushButton, QAbstractItemView)
 import pymysql
+
+from .buguan_param_table_style import apply_buguan_param_table_style
+
+
+class _ItalicColumnDelegate(QStyledItemDelegate):
+    """强制指定列斜体渲染，避免全局样式表覆盖 item 字体。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+    def paint(self, painter, option, index):
+        try:
+            opt = option
+            # QStyleOptionViewItem 是可变对象，直接改 opt.font 即可
+            opt.font.setItalic(True)
+            option = opt
+        except Exception:
+            pass
+        return super().paint(painter, option, index)
+
+
+_SUBSCRIPT_DIGITS = str.maketrans(
+    {
+        "0": "₀",
+        "1": "₁",
+        "2": "₂",
+        "3": "₃",
+        "4": "₄",
+        "5": "₅",
+        "6": "₆",
+        "7": "₇",
+        "8": "₈",
+        "9": "₉",
+    }
+)
+
+
+def _display_with_subscript_digits(text: str) -> str:
+    """
+    仅用于界面显示：把所有数字替换为 Unicode 下标数字。
+    例如：α1 -> α₁, R12 -> R₁₂
+    存储/内部键仍使用原始字符串（如 α1）。
+    """
+    try:
+        return ("" if text is None else str(text)).translate(_SUBSCRIPT_DIGITS)
+    except Exception:
+        return "" if text is None else str(text)
 
 class ImagePreviewDialog(QDialog):
     """显示可缩放大图的弹窗，支持 Ctrl+滚轮缩放"""
@@ -111,13 +159,58 @@ def create_product_connection():
         return None
 
 
+# 元件库/未迁移产品数据仍可能用旧单字母代号；界面“全改名”后按新代号取参，需补全映射
+_PLATE_OLD_TO_NEW_BY_NODE = {
+    "b_a": {"a": "x1", "b": "x2", "c": "α"},
+    "b_b": {"a": "R1", "b": "p", "c": "α"},
+    "b_c": {"a": "α1", "b": "b", "c": "p1", "d": "d1", "e": "α2", "f": "R", "g": "n", "h": "e"},
+    "b_d": {
+        "a": "β1", "b": "β2", "c": "p1", "d": "R1", "e": "b1", "f": "R2", "g": "R3", "h": "e",
+        "i": "β3", "j": "β4", "k": "p2", "L": "R4", "l": "R4", "M": "b2", "m": "b2",
+    },
+    "b_e": {
+        "a": "β1", "b": "p1", "c": "b1", "d": "R1", "e": "R2", "f": "H", "g": "R3", "h": "β2",
+        "i": "d1", "j": "β3", "k": "b2", "L": "R4", "l": "R4", "m": "R5", "n": "p2",
+        "s": "α", "p": "e", "q": "d2", "r": "d3",
+    },
+    "b_h": {
+        "a": "β1", "b": "p1", "c": "R1", "d": "R2", "e": "b1", "f": "b2", "g": "R3", "h": "β2",
+        "i": "R4", "j": "R5", "k": "e", "l": "p2",
+    },
+    "e_a": {"a": "d1", "b": "d2", "c": "d3", "d": "p", "e": "α1", "f": "α2"},
+    "e_b": {"a": "R1", "b": "d1", "c": "d2", "d": "b", "e": "p", "f": "R2", "g": "d3", "h": "α", "j": "e", "K": "K"},
+    "e_c": {"a": "p1", "b": "d1", "c": "R1", "d": "d2", "e": "b", "f": "R2", "g": "d3", "h": "α", "j": "e", "l": "p2", "L": "p2", "K": "K"},
+    "e_d": {"a": "R1", "b": "R2", "c": "d1", "d": "b", "e": "α1", "f": "α2", "g": "p", "h": "h", "j": "e"},
+    "e_e": {"a": "R1", "b": "R2", "c": "α1", "d": "d1", "e": "b", "f": "α2", "g": "p", "h": "h", "j": "e", "k": "d2"},
+    "e_f": {"a": "R1", "b": "h", "c": "α", "d": "p", "e": "e"},
+    "e_g": {"a": "R1", "b": "R2", "c": "h1", "d": "h2", "e": "α", "f": "p", "g": "e"},
+}
+
+
+def _normalize_plate_form_params(plate_type, param_dict):
+    """若库中仅有旧代号，则按节点映射补全新代号键（不覆盖已有新代号值）。"""
+    if not param_dict:
+        return param_dict
+    mapping = _PLATE_OLD_TO_NEW_BY_NODE.get(str(plate_type).strip())
+    if not mapping:
+        return param_dict
+    out = dict(param_dict)
+    for old_k, new_k in mapping.items():
+        new_v = out.get(new_k)
+        if new_v is not None and str(new_v).strip() != "":
+            continue
+        old_v = out.get(old_k)
+        if old_v is not None and str(old_v).strip() != "":
+            out[new_k] = old_v
+    return out
+
+
 def get_plate_form_params(image_name, product_id=None):
     """从管板形式表中获取参数，仿照tube_sheet_connection.py的多级查询逻辑"""
     # 根据图片名称构建管板类型
     plate_type = os.path.splitext(image_name)[0]
     plate_type = f"{plate_type}"  # 直接构建管板类型，不进行额外拆分
     
-    print(f"🔍 [调试] 查询管板形式参数，管板类型: '{plate_type}', 产品ID: '{product_id}'")
     
     # 步骤1：优先从产品设计活动库读取（如果有product_id）
     if product_id:
@@ -134,7 +227,6 @@ def get_plate_form_params(image_name, product_id=None):
                     params = cursor.fetchall()
                     
                     if params:
-                        print(f"✅ [调试] 从产品设计活动库找到 {len(params)} 个参数")
                         # 处理查询结果 - 去重处理
                         param_dict = {}
                         seen_params = set()  # 用于去重
@@ -149,23 +241,22 @@ def get_plate_form_params(image_name, product_id=None):
                                 param_dict[param_symbol] = str(param_value) if param_value is not None else ""
                                 # print(f"✅ [调试] 添加参数: '{param_symbol}' = '{param_dict[param_symbol]}'")
                             elif param_symbol in seen_params:
-                                print(f"🔄 [调试] 跳过重复参数: '{param_symbol}' = '{param_value}'")
+                                continue
                             else:
-                                print(f"❌ [调试] 跳过空参数符号")
+                                continue
                         
                         # print(f"🔍 [调试] 最终参数字典包含 {len(param_dict)} 个参数")
-                        return param_dict
+                        return _normalize_plate_form_params(plate_type, param_dict)
                     else:
-                        print(f"🔍 [调试] 产品设计活动库中没有找到参数，将查询元件库")
+                        pass
             except pymysql.Error as e:
-                print(f"❌ [调试] 产品设计活动库查询错误: {e}")
+                print(f"产品设计活动库查询错误: {e}")
             finally:
                 prod_conn.close()
     
     # 步骤2：如果产品库没有，从元件库读取
     comp_conn = create_component_connection()
     if not comp_conn:
-        print(f"❌ [调试] 无法连接元件库")
         return {}
     
     try:
@@ -178,26 +269,21 @@ def get_plate_form_params(image_name, product_id=None):
             cursor.execute(query, (plate_type,))
             params = cursor.fetchall()
             
-            print(f"🔍 [调试] 从元件库找到 {len(params)} 个参数")
-            
             # 处理查询结果
             param_dict = {}
             for param in params:
                 param_symbol = param['参数符号']
                 param_value = param['默认值']
-                print(f"🔍 [调试] 处理参数: '{param_symbol}' = '{param_value}' (类型: {type(param_value)})")
                 
                 # 只检查参数符号不为空，默认值可以为空字符串
                 if param_symbol:
                     param_dict[param_symbol] = str(param_value) if param_value is not None else ""
-                    print(f"✅ [调试] 添加参数: '{param_symbol}' = '{param_dict[param_symbol]}'")
                 else:
-                    print(f"❌ [调试] 跳过空参数符号")
+                    continue
             
-            print(f"🔍 [调试] 最终参数字典包含 {len(param_dict)} 个参数")
-            return param_dict
+            return _normalize_plate_form_params(plate_type, param_dict)
     except pymysql.Error as e:
-        print(f"❌ [调试] 元件库查询错误: {e}")
+        print(f"元件库查询错误: {e}")
         return {}
     finally:
         comp_conn.close()
@@ -335,10 +421,59 @@ class ImageLabel(QLabel):
 # -----------------------------------------------------------------
 
 
+class ToggleSwitch(QWidget):
+    """一个轻量自绘开关：checked=True 显示蓝色，False 显示灰色。"""
+
+    toggled = pyqtSignal(bool)
+
+    def __init__(self, parent=None, checked=True):
+        super().__init__(parent)
+        self._checked = bool(checked)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedSize(52, 28)
+
+    def isChecked(self) -> bool:
+        return bool(self._checked)
+
+    def setChecked(self, checked: bool):
+        checked = bool(checked)
+        if self._checked == checked:
+            return
+        self._checked = checked
+        self.update()
+        self.toggled.emit(self._checked)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.setChecked(not self._checked)
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        w = self.width()
+        h = self.height()
+        radius = h / 2.0
+        knob_d = h - 4
+
+        bg = QColor("#2f80ff") if self._checked else QColor("#cfcfcf")
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(bg))
+        painter.drawRoundedRect(0, 0, w, h, radius, radius)
+
+        knob_x = (w - knob_d - 2) if self._checked else 2
+        painter.setBrush(QBrush(QColor("#ffffff")))
+        painter.drawEllipse(int(knob_x), 2, int(knob_d), int(knob_d))
+        painter.end()
+
+
 class SheetFormPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent = parent  # 保存父窗口引用
+        # 用户只读开关：True=只读（禁用一切操作），False=按原逻辑
+        self._sheet_form_user_readonly = False
         # 标记图片下拉框是否已在初始时自动弹出
         self._sheet_form_combo_popup_done = False
         self.sheet_form_param_layout = None
@@ -348,6 +483,11 @@ class SheetFormPage(QWidget):
         self.Di = None  # 初始化全局变量：壳体内直径 Dis
         self.use_outer_diameter_base = None  # "是否以外径为基准"的当前值
         self.DL = None  # 布管限定圆 DL
+        self._last_valid_DL = None  # 上一次合法的 DL 值
+        # 同一会话内保留用户选中的管板节点，避免切 tab 后被数据库默认值覆盖
+        self._sheet_form_state_initialized = False
+        self._session_selected_node = None
+        self._sheet_form_restored_product_id = None
         # 参数表程序化更新保护：避免初始化/联动时误判为“手动修改”
         self._sheet_form_programmatic_update = False
         self.setup_ui()
@@ -356,11 +496,23 @@ class SheetFormPage(QWidget):
             self._init_fallback_param_layout()
 
     def showEvent(self, event):
-        """仅在页面第一次真正显示时，让图片下拉框处于弹出状态。"""
+        """页面显示时恢复型式/节点；同一会话内切 tab 保留用户当前选中，不重复读库。"""
         super().showEvent(event)
         try:
-            # 页面显示时先按 heat_exchanger 规则刷新一次“管板型式可编辑性”
-            self._apply_plate_type_rule()
+            current_pid = self.get_product_id()
+            if self._sheet_form_restored_product_id != current_pid:
+                self._sheet_form_state_initialized = False
+                self._session_selected_node = None
+                self._sheet_form_restored_product_id = current_pid
+
+            if not getattr(self, "_sheet_form_user_readonly", False):
+                if not self._sheet_form_state_initialized:
+                    self._restore_saved_plate_state()
+                elif self._session_selected_node:
+                    idx = self._find_image_index_for_node(self._session_selected_node)
+                    self._handle_image_click(
+                        None, idx, restoring=True, skip_sync=True
+                    )
             if (not self._sheet_form_combo_popup_done
                     and hasattr(self, 'sheet_form_connection_type_combo')
                     and self.sheet_form_connection_type_combo is not None
@@ -371,7 +523,7 @@ class SheetFormPage(QWidget):
             pass
 
     def _resolve_plate_type_rule(self, heat_exchanger):
-        """根据产品型式返回(默认管板型式, 是否允许用户修改)。"""
+        """根据产品型式返回(默认管板型式, 是否允许用户修改管板型式下拉)。"""
         hx = str(heat_exchanger or "").strip().upper()
         # 默认：a型，可修改（兜底）
         default_type = "a"
@@ -384,13 +536,46 @@ class SheetFormPage(QWidget):
         if hx in {"AEU", "BEU"}:
             return "a", True
         # 固定 b 型，不允许修改
-        if hx in {"NEN"}:
+        if hx in {"NEN", "NEN(Head)"}:
             return "b", False
         # 固定 e 型，不允许修改
         if hx in {"AEM", "BEM"}:
             return "e", False
 
         return default_type, allow_modify
+
+    def _get_heat_exchanger_from_product_db(self, product_id: str):
+        """优先从产品设计活动表查询真实“产品型式”，避免父窗口 heat_exchanger 被临时兜底值污染。"""
+        pid = str(product_id or "").strip()
+        if not pid:
+            return None
+        conn = create_product_connection()
+        if not conn:
+            return None
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT 产品型式
+                    FROM 产品设计活动表
+                    WHERE 产品ID = %s
+                    LIMIT 1
+                    """,
+                    (pid,),
+                )
+                row = cursor.fetchone()
+                if row and isinstance(row, dict):
+                    hx = row.get("产品型式")
+                    hx = str(hx).strip().upper() if hx is not None else ""
+                    return hx or None
+        except Exception:
+            return None
+        finally:
+            try:
+                if conn and conn.open:
+                    conn.close()
+            except Exception:
+                pass
 
     def _apply_plate_type_rule(self, saved_plate_type=None):
         """按 heat_exchanger 规则设置下拉框默认值及可编辑性。"""
@@ -400,7 +585,22 @@ class SheetFormPage(QWidget):
 
             connection_type_images = ['a', 'b', 'c', 'd', 'e', 'f']
             parent_value = getattr(self.parent, "heat_exchanger", None)
-            target_type, allow_modify = self._resolve_plate_type_rule(parent_value)
+            # 关键：规则判定优先使用数据库中的真实产品型式
+            hx_for_rule = None
+            try:
+                hx_for_rule = self._get_heat_exchanger_from_product_db(self.get_product_id())
+            except Exception:
+                hx_for_rule = None
+            if not hx_for_rule:
+                hx_for_rule = parent_value
+
+            # 保存一份本页实际使用的型式判定值，供默认节点等逻辑使用
+            try:
+                self._sheet_form_hx_for_rule = str(hx_for_rule or "").strip().upper()
+            except Exception:
+                self._sheet_form_hx_for_rule = None
+
+            target_type, allow_modify = self._resolve_plate_type_rule(hx_for_rule)
 
             # 可修改时：优先已保存值；不可修改时：强制规则值
             selected_type = target_type
@@ -426,12 +626,24 @@ class SheetFormPage(QWidget):
             self.sheet_form_updates_image_path(target_index)
 
             print(
-                f"[sheet_form_page] 规则应用: heat_exchanger={parent_value}, "
+                f"[sheet_form_page] 规则应用: heat_exchanger={parent_value}, hx_for_rule={hx_for_rule}, "
                 f"target_type={target_type}, selected_type={selected_type}, allow_modify={allow_modify}"
             )
         except Exception as e:
             print(f"[sheet_form_page] 应用管板型式规则失败: {e}")
             traceback.print_exc()
+
+    def _get_default_node_for_hx(self):
+        """表1「节点样式 a)」：无已保存节点时的默认节点（不含扩展名），不禁止切换其它节点。"""
+        try:
+            hx = str(getattr(self, "_sheet_form_hx_for_rule", "") or "").strip().upper()
+        except Exception:
+            hx = ""
+        if hx in ["NEN", "NEN(Head)"]:
+            return "b_a"
+        if hx in {"AEM", "BEM"}:
+            return "e_a"
+        return None
 
     def _mark_sheet_form_value_blue(self, row, col=1):
         """将参数值单元格标记为蓝色（仿 My_Piping 的手动修改高亮）。"""
@@ -445,7 +657,7 @@ class SheetFormPage(QWidget):
             pass
 
     def _on_sheet_form_param_item_changed(self, item):
-        """参数表手动改值后高亮蓝色。"""
+        """参数表手动改值后高亮蓝色，并对 '布管限定圆 DL' 进行数值限制检查。"""
         try:
             if getattr(self, "_sheet_form_programmatic_update", False):
                 return
@@ -458,7 +670,41 @@ class SheetFormPage(QWidget):
             flags = item.flags()
             if not (flags & Qt.ItemIsEditable):
                 return
+            # 高亮变蓝
             self._mark_sheet_form_value_blue(item.row(), 1)
+            # 检查是否为布管限定圆 DL 参数
+            param_name_item = self.sheet_form_param_table.item(item.row(), 0)
+            param_name = None
+            if param_name_item:
+                try:
+                    param_name = param_name_item.data(Qt.UserRole)
+                except Exception:
+                    param_name = None
+                if not param_name:
+                    param_name = param_name_item.text()
+            if param_name and str(param_name).strip() == "布管限定圆 DL":
+                # 获取用户输入的数值
+                try:
+                    user_val = float(item.text())
+                except Exception:
+                    QMessageBox.warning(self, "提示", "您输入的布管限定圆数值已超限，请重新输入!")
+                    with SignalBlocker(self.sheet_form_param_table):
+                        item.setText(str(self._last_valid_DL) if hasattr(self, "_last_valid_DL") else "")
+                    return
+                # 计算允许的上限（当前壳体内直径 Dis）
+                limit = getattr(self, "Di", None)
+                if limit is not None:
+                    try:
+                        limit = float(limit)
+                    except Exception:
+                        limit = None
+                if limit is not None and user_val > limit:
+                    QMessageBox.warning(self, "提示", "您输入的布管限定圆数值已超限，请重新输入!")
+                    with SignalBlocker(self.sheet_form_param_table):
+                        item.setText(str(self._last_valid_DL) if hasattr(self, "_last_valid_DL") else "")
+                    return
+                # 合法值，更新缓存
+                self._last_valid_DL = user_val
         except Exception:
             pass
 
@@ -490,11 +736,14 @@ class SheetFormPage(QWidget):
                 raw_type = row.get("管板类型") if isinstance(row, dict) else row[0]
                 plate_type = str(raw_type).strip() if raw_type is not None else ""
 
-                # 规范化管板类型：去掉“型管板”等后缀，只保留前缀字母
+                # 规范化：e_a / b_h → 下拉框用首段字母；仅 e型管板 → e
                 if plate_type:
                     plate_type = plate_type.replace("型管板", "").strip()
                     if plate_type:
-                        plate_type = plate_type[0].lower()
+                        if "_" in plate_type:
+                            plate_type = plate_type.split("_", 1)[0].lower()
+                        else:
+                            plate_type = plate_type[0].lower()
 
                 print(f"[sheet_form_page] 自动选择已保存管板形式 - 原始类型: {raw_type}, 规范化后: {plate_type}")
                 return plate_type or None
@@ -550,6 +799,72 @@ class SheetFormPage(QWidget):
         finally:
             conn.close()
 
+    def _resolve_initial_node_name(self, saved_node, default_node):
+        """确定打开页面时应选中的节点名（与图片文件名一致，如 e_a）。"""
+        saved_node = str(saved_node or "").strip()
+        default_node = str(default_node or "").strip()
+        target = saved_node or default_node
+        # 库中若只存了型式字母（如 e），则改用规则默认节点或当前文件夹首图
+        if target and "_" not in target:
+            if default_node:
+                target = default_node
+            elif getattr(self, "sheet_form_current_images", None):
+                try:
+                    first = self.sheet_form_current_images[0]
+                    target = os.path.splitext(os.path.basename(str(first)))[0]
+                except Exception:
+                    pass
+        return target or None
+
+    def _find_image_index_for_node(self, node_name):
+        """在当前型式图片列表中查找节点对应的索引。"""
+        if not node_name or not getattr(self, "sheet_form_current_images", None):
+            return 0
+        for idx, img_path in enumerate(self.sheet_form_current_images):
+            base = os.path.splitext(os.path.basename(str(img_path)))[0]
+            if base == node_name:
+                return idx
+        return 0
+
+    def _restore_saved_plate_state(self, retry=0):
+        """恢复已保存的管板型式、节点选中状态及右侧参数表。"""
+        try:
+            try:
+                self.get_DN_and_Di_from_parent()
+            except Exception:
+                pass
+
+            product_id = self.get_product_id()
+            if not product_id:
+                if retry < 8:
+                    QTimer.singleShot(200, lambda: self._restore_saved_plate_state(retry + 1))
+                return
+
+            saved_plate_type = self._get_saved_plate_type()
+            self._apply_plate_type_rule(saved_plate_type=saved_plate_type)
+
+            if not self.sheet_form_current_images or not self.sheet_form_image_labels:
+                if retry < 8:
+                    QTimer.singleShot(200, lambda: self._restore_saved_plate_state(retry + 1))
+                return
+
+            saved_node = self._get_saved_plate_node()
+            default_node = self._get_default_node_for_hx()
+            target_node = self._resolve_initial_node_name(saved_node, default_node)
+            click_index = self._find_image_index_for_node(target_node)
+
+            print(
+                f"[sheet_form_page] 恢复保存状态: product_id={product_id}, "
+                f"saved_node={saved_node}, default_node={default_node}, "
+                f"选中节点={target_node}, index={click_index}"
+            )
+            self._session_selected_node = target_node
+            self._handle_image_click(None, click_index, restoring=True, skip_sync=True)
+            self._sheet_form_state_initialized = True
+        except Exception as e:
+            print(f"[sheet_form_page] 恢复保存状态失败: {e}")
+            traceback.print_exc()
+
     def _init_fallback_param_layout(self):
         """创建备用布局，防止初始化失败"""
         self.sheet_form_param_frame = QFrame()
@@ -562,6 +877,24 @@ class SheetFormPage(QWidget):
             main_layout = QVBoxLayout(self)
             main_layout.setContentsMargins(20, 20, 20, 20)
             main_layout.setSpacing(20)
+
+            # 顶部只读开关（左上角，开=可操作；关=只读）
+            try:
+                top_bar = QHBoxLayout()
+                top_bar.setSpacing(10)
+
+                self.sheet_form_readonly_title = QLabel("管板型式")
+                self.sheet_form_readonly_title.setStyleSheet("font-size: 18px; font-weight: 600; color: #222;")
+                top_bar.addWidget(self.sheet_form_readonly_title)
+
+                self.sheet_form_readonly_switch = ToggleSwitch(checked=True)
+                self.sheet_form_readonly_switch.toggled.connect(self._on_sheet_form_toggle_readonly)
+                top_bar.addWidget(self.sheet_form_readonly_switch)
+                top_bar.addStretch()
+                main_layout.addLayout(top_bar)
+            except Exception:
+                self.sheet_form_readonly_title = None
+                self.sheet_form_readonly_switch = None
 
             # 1. 下拉框区域
             header_layout = QHBoxLayout()
@@ -761,7 +1094,7 @@ class SheetFormPage(QWidget):
             self.sheet_form_param_frame = QFrame()
             self.sheet_form_param_frame.setStyleSheet("""
                 QFrame {
-                    background-color: #f9f9f9;
+                    background-color: #ffffff;
                     border-radius: 8px;
                 }
             """)
@@ -772,6 +1105,13 @@ class SheetFormPage(QWidget):
             # 创建参数表格 - 完全照搬tube_sheet_connection.py的样式
             self.sheet_form_param_table = NoWheelTableWidget()
             self.sheet_form_param_table.setColumnCount(2)
+            # 强制“参数名列”斜体显示（避免 main.py 全局样式覆盖）
+            try:
+                self.sheet_form_param_table.setItemDelegateForColumn(
+                    0, _ItalicColumnDelegate(self.sheet_form_param_table)
+                )
+            except Exception:
+                pass
             # 注释掉表头
             self.sheet_form_param_table.verticalHeader().setVisible(False)
             self.sheet_form_param_table.horizontalHeader().setVisible(False)  # 隐藏水平表头
@@ -796,6 +1136,7 @@ class SheetFormPage(QWidget):
             
             # 在表格显示后设置初始列宽
             self.sheet_form_param_table.showEvent = lambda event: set_initial_column_widths()
+            apply_buguan_param_table_style(self.sheet_form_param_table, value_column_index=1)
             # 参数值手动修改后高亮蓝色（仿 My_Piping）
             self.sheet_form_param_table.itemChanged.connect(self._on_sheet_form_param_item_changed)
             
@@ -806,41 +1147,15 @@ class SheetFormPage(QWidget):
             #
             # 延迟检查父窗口的 heat_exchanger 值
             # 延迟检查父窗口的 heat_exchanger 值，并优先使用已保存的管板类型
-            def _delayed_check_heat_exchanger():
-                try:
-                    # 进入管板形式页面时，先从布管界面刷新一次关键参数
-                    try:
-                        self.get_DN_and_Di_from_parent()
-                    except Exception:
-                        pass
-
-                    # 1. 优先从产品设计活动表_管板形式表中获取已保存的管板类型
-                    saved_plate_type = self._get_saved_plate_type()
-                    print(f"[DEBUG 延迟检查] 已保存的管板类型: {saved_plate_type}")
-                    # 2. 依据 heat_exchanger 规则设置默认管板型式及可编辑性
-                    self._apply_plate_type_rule(saved_plate_type=saved_plate_type)
-
-                    # 4. 如果当前有图片，优先根据已保存节点模拟点击，自动加载参数
-                    if self.sheet_form_current_images and len(self.sheet_form_image_labels) > 0:
-                        target_node = self._get_saved_plate_node()
-                        print(f"[DEBUG 延迟检查] 已保存的管板节点: {target_node}")
-
-                        click_index = 0
-                        if target_node:
-                            for idx, img_path in enumerate(self.sheet_form_current_images):
-                                base = os.path.splitext(os.path.basename(str(img_path)))[0]
-                                if base == target_node:
-                                    click_index = idx
-                                    break
-
-                        # 等价于用户单击对应图，加载参数表
-                        self._handle_image_click(None, click_index)
-
-                except Exception as e:
-                    print(f"[DEBUG 延迟检查] 发生异常: {e}")
-                    traceback.print_exc()
-            # 延迟 100 毫秒执行
-            QTimer.singleShot(100, _delayed_check_heat_exchanger)
+            # 页面创建后延迟恢复（productID 可能稍后才就绪）；若 showEvent 已恢复则跳过
+            QTimer.singleShot(
+                100,
+                lambda: (
+                    self._restore_saved_plate_state()
+                    if not self._sheet_form_state_initialized
+                    else None
+                ),
+            )
             #
 
         except Exception as e:
@@ -848,6 +1163,118 @@ class SheetFormPage(QWidget):
             traceback.print_exc()
             # 异常时确保布局有默认值
             self._init_fallback_param_layout()
+
+    def _on_sheet_form_toggle_readonly(self, is_operation_on: bool):
+        """顶部开关。is_operation_on=True 表示可操作；False 表示只读。"""
+        try:
+            self._sheet_form_user_readonly = (not bool(is_operation_on))
+        except Exception:
+            self._sheet_form_user_readonly = True
+        self._apply_sheet_form_readonly_state()
+
+    def _apply_plate_type_combo_enabled_from_rule(self):
+        """仅恢复型式下拉框可编辑性，不刷新图片、不清空参数表。"""
+        try:
+            if (
+                not hasattr(self, "sheet_form_connection_type_combo")
+                or self.sheet_form_connection_type_combo is None
+            ):
+                return
+            hx = getattr(self, "_sheet_form_hx_for_rule", None)
+            if not hx:
+                try:
+                    hx = self._get_heat_exchanger_from_product_db(self.get_product_id())
+                except Exception:
+                    hx = None
+            if not hx:
+                hx = getattr(self.parent, "heat_exchanger", None)
+            _, allow_modify = self._resolve_plate_type_rule(hx)
+            self.sheet_form_connection_type_combo.setEnabled(allow_modify)
+        except Exception:
+            pass
+
+    def _get_selected_sheet_form_image_index(self):
+        """当前选中的管板节点图片索引，无选中返回 None。"""
+        try:
+            for idx, lbl in enumerate(self.sheet_form_image_labels):
+                if lbl.property("selected"):
+                    return idx
+        except Exception:
+            pass
+        return None
+
+    def _reload_sheet_form_params_for_selected_node(self, force=False):
+        """按当前选中节点重新填充右侧参数表（只读开关重新打开后使用）。"""
+        try:
+            if (
+                not hasattr(self, "sheet_form_param_table")
+                or self.sheet_form_param_table is None
+            ):
+                return
+            if not force and self.sheet_form_param_table.rowCount() > 0:
+                return
+            idx = self._get_selected_sheet_form_image_index()
+            if idx is not None and getattr(self, "sheet_form_current_images", None):
+                self._handle_image_click(None, idx, restoring=True, skip_sync=True)
+            else:
+                self._restore_saved_plate_state()
+        except Exception:
+            pass
+
+    def _sync_sheet_form_widgets_enabled(self):
+        """只读时冻结整页操作（不可切换型式/节点、不可改参数）；打开开关后才可交互。"""
+        readonly = bool(getattr(self, "_sheet_form_user_readonly", False))
+        interactive = not readonly
+        try:
+            if (
+                hasattr(self, "sheet_form_connection_type_combo")
+                and self.sheet_form_connection_type_combo is not None
+            ):
+                if readonly:
+                    self.sheet_form_connection_type_combo.setEnabled(False)
+                else:
+                    self._apply_plate_type_combo_enabled_from_rule()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "image_scroll_area") and self.image_scroll_area is not None:
+                self.image_scroll_area.setEnabled(interactive)
+        except Exception:
+            pass
+        try:
+            for lbl in getattr(self, "sheet_form_image_labels", []) or []:
+                lbl.setEnabled(interactive)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "sheet_form_param_frame") and self.sheet_form_param_frame is not None:
+                self.sheet_form_param_frame.setEnabled(interactive)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "sheet_form_param_table") and self.sheet_form_param_table is not None:
+                self.sheet_form_param_table.setEnabled(interactive)
+                if readonly:
+                    self.sheet_form_param_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+                else:
+                    self.sheet_form_param_table.setEditTriggers(
+                        QAbstractItemView.DoubleClicked
+                        | QAbstractItemView.SelectedClicked
+                        | QAbstractItemView.EditKeyPressed
+                    )
+        except Exception:
+            pass
+
+    def _apply_sheet_form_readonly_state(self):
+        """根据 _sheet_form_user_readonly 应用界面禁用/启用。"""
+        readonly = bool(getattr(self, "_sheet_form_user_readonly", False))
+        self._sync_sheet_form_widgets_enabled()
+        # 重新打开开关：仅当参数表被意外清空时再按当前节点补填
+        if not readonly:
+            try:
+                self._reload_sheet_form_params_for_selected_node(force=False)
+            except Exception:
+                pass
 
     def get_product_id(self):
         # 方法内容保持不变
@@ -869,9 +1296,13 @@ class SheetFormPage(QWidget):
             print(f"[sheet_form_page] 获取productID时出错: {e}")
             return None
 
-    def _handle_image_click(self, event, index):
+    def _handle_image_click(self, event, index, restoring=False, skip_sync=False):
         # 方法内容保持不变
         try:
+            # 用户只读开关：只读时不允许手动点选；恢复保存状态时仍加载参数表
+            if not restoring and getattr(self, "_sheet_form_user_readonly", False):
+                return
+
             # 每次点击图片前，尝试从父窗口刷新一次关键参数（DN、Di、是否以外径为基准、DL）
             try:
                 self.get_DN_and_Di_from_parent()
@@ -907,6 +1338,10 @@ class SheetFormPage(QWidget):
             # 输出选中的图片名称（不带扩展名）
             image_name_without_ext = os.path.splitext(clicked_image)[0]
             print(f"选中节点: {image_name_without_ext}")
+
+            if not restoring:
+                self._session_selected_node = image_name_without_ext
+                self._sheet_form_state_initialized = True
             
             # 输出产品ID
             product_id = self.get_product_id()
@@ -943,6 +1378,37 @@ class SheetFormPage(QWidget):
             product_id = self.get_product_id()
             params = get_plate_form_params(clicked_image, product_id)
             if params:
+                # 全改名模式：数据库与产品活动库均使用“新代号”存储，这里按节点给出固定顺序的参数清单
+                _lookup = {str(k).strip(): v for k, v in params.items()}
+                param_items = list(params.items())
+                if selected_folder == "b" and image_name_without_ext == "b_a":
+                    param_items = [("x1", _lookup.get("x1", "")), ("x2", _lookup.get("x2", "")), ("α", _lookup.get("α", ""))]
+                elif selected_folder == "b" and image_name_without_ext == "b_b":
+                    param_items = [("R1", _lookup.get("R1", "")), ("p", _lookup.get("p", "")), ("α", _lookup.get("α", "")), ("b", _lookup.get("b", "2")), ("R2", _lookup.get("R2", "12"))]
+                elif selected_folder == "b" and image_name_without_ext == "b_c":
+                    param_items = [("α1", _lookup.get("α1", "")), ("b", _lookup.get("b", "")), ("p1", _lookup.get("p1", "")), ("d1", _lookup.get("d1", "")), ("α2", _lookup.get("α2", "")), ("R", _lookup.get("R", "")), ("n", _lookup.get("n", "")), ("e", _lookup.get("e", "")), ("p2", _lookup.get("p2", "2")), ("d2", _lookup.get("d2", "1"))]
+                elif selected_folder == "b" and image_name_without_ext == "b_d":
+                    param_items = [("β1", _lookup.get("β1", "")), ("β2", _lookup.get("β2", "")), ("p1", _lookup.get("p1", "")), ("R1", _lookup.get("R1", "")), ("b1", _lookup.get("b1", "")), ("R2", _lookup.get("R2", "")), ("R3", _lookup.get("R3", "")), ("e", _lookup.get("e", "")), ("β3", _lookup.get("β3", "")), ("β4", _lookup.get("β4", "")), ("p2", _lookup.get("p2", "")), ("R4", _lookup.get("R4", "")), ("b2", _lookup.get("b2", "1.5"))]
+                elif selected_folder == "b" and image_name_without_ext == "b_e":
+                    param_items = [("β1", _lookup.get("β1", "")), ("p1", _lookup.get("p1", "")), ("b1", _lookup.get("b1", "")), ("R1", _lookup.get("R1", "")), ("R2", _lookup.get("R2", "")), ("H", _lookup.get("H", "")), ("R3", _lookup.get("R3", "")), ("β2", _lookup.get("β2", "")), ("d1", _lookup.get("d1", "")), ("β3", _lookup.get("β3", "")), ("b2", _lookup.get("b2", "")), ("R4", _lookup.get("R4", "")), ("R5", _lookup.get("R5", "")), ("p2", _lookup.get("p2", "")), ("α", _lookup.get("α", "")), ("e", _lookup.get("e", "")), ("d2", _lookup.get("d2", "")), ("d3", _lookup.get("d3", ""))]
+                elif selected_folder == "b" and image_name_without_ext == "b_h":
+                    param_items = [("β1", _lookup.get("β1", "")), ("p1", _lookup.get("p1", "")), ("R1", _lookup.get("R1", "")), ("R2", _lookup.get("R2", "")), ("b1", _lookup.get("b1", "")), ("b2", _lookup.get("b2", "")), ("R3", _lookup.get("R3", "")), ("β2", _lookup.get("β2", "")), ("R4", _lookup.get("R4", "")), ("R5", _lookup.get("R5", "")), ("e", _lookup.get("e", "")), ("p2", _lookup.get("p2", ""))]
+                elif selected_folder == "e" and image_name_without_ext == "e_a":
+                    param_items = [("d1", _lookup.get("d1", "")), ("d2", _lookup.get("d2", "")), ("d3", _lookup.get("d3", "")), ("p", _lookup.get("p", "")), ("α1", _lookup.get("α1", "")), ("α2", _lookup.get("α2", ""))]
+                elif selected_folder == "e" and image_name_without_ext == "e_b":
+                    param_items = [("R1", _lookup.get("R1", "")), ("d1", _lookup.get("d1", "")), ("d2", _lookup.get("d2", "")), ("b", _lookup.get("b", "")), ("p", _lookup.get("p", "")), ("R2", _lookup.get("R2", "")), ("d3", _lookup.get("d3", "")), ("α", _lookup.get("α", "")), ("e", _lookup.get("e", "")), ("K", _lookup.get("K", ""))]
+                elif selected_folder == "e" and image_name_without_ext == "e_c":
+                    param_items = [("p1", _lookup.get("p1", "")), ("d1", _lookup.get("d1", "")), ("R1", _lookup.get("R1", "")), ("d2", _lookup.get("d2", "")), ("b", _lookup.get("b", "")), ("R2", _lookup.get("R2", "")), ("d3", _lookup.get("d3", "")), ("α", _lookup.get("α", "")), ("e", _lookup.get("e", "")), ("p2", _lookup.get("p2", "")), ("K", _lookup.get("K", ""))]
+                elif selected_folder == "e" and image_name_without_ext == "e_d":
+                    param_items = [("R1", _lookup.get("R1", "")), ("R2", _lookup.get("R2", "")), ("d1", _lookup.get("d1", "")), ("b", _lookup.get("b", "")), ("α1", _lookup.get("α1", "")), ("α2", _lookup.get("α2", "")), ("p", _lookup.get("p", "")), ("h", _lookup.get("h", "")), ("e", _lookup.get("e", ""))]
+                elif selected_folder == "e" and image_name_without_ext == "e_e":
+                    param_items = [("R1", _lookup.get("R1", "")), ("R2", _lookup.get("R2", "")), ("α1", _lookup.get("α1", "")), ("d1", _lookup.get("d1", "")), ("b", _lookup.get("b", "")), ("α2", _lookup.get("α2", "")), ("p", _lookup.get("p", "")), ("h", _lookup.get("h", "")), ("e", _lookup.get("e", "")), ("d2", _lookup.get("d2", ""))]
+                elif selected_folder == "e" and image_name_without_ext == "e_f":
+                    param_items = [("R1", _lookup.get("R1", "")), ("h", _lookup.get("h", "")), ("α", _lookup.get("α", "")), ("p", _lookup.get("p", "")), ("e", _lookup.get("e", ""))]
+                elif selected_folder == "e" and image_name_without_ext == "e_g":
+                    # h 使用 h1/h2 两行（后续合并显示）
+                    param_items = [("R1", _lookup.get("R1", "")), ("R2", _lookup.get("R2", "")), ("h1", _lookup.get("h1", "1.5")), ("h2", _lookup.get("h2", "25")), ("α", _lookup.get("α", "")), ("p", _lookup.get("p", "")), ("e", _lookup.get("e", ""))]
+
                 # 每次填充前清除单元格合并状态
                 self.sheet_form_param_table.clearSpans()
 
@@ -950,40 +1416,62 @@ class SheetFormPage(QWidget):
                 self.sheet_form_param_table.setColumnCount(2)
 
                 # 设置表格行数
-                self.sheet_form_param_table.setRowCount(len(params))
+                # e_g / f_g 节点会把 h1+h2 合并为一行 h，因此显示行数需减 1，避免尾部空行
+                display_row_count = len(param_items)
+                if selected_folder in ("e", "f") and image_name_without_ext in ("e_g", "f_g"):
+                    keys = [str(k).strip() for k, _ in param_items]
+                    if "h1" in keys and "h2" in keys:
+                        display_row_count -= 1
+                self.sheet_form_param_table.setRowCount(max(display_row_count, 0))
 
                 # 填充表格数据（程序化更新期间不触发“手动修改变蓝”）
                 self._sheet_form_programmatic_update = True
                 try:
-                    for row, (param_name, default_value) in enumerate(params.items()):
-                        # e_g / f_g 管板：c1 + c2 在界面上合并为参数 c（一行）
+                    display_row = 0
+                    for row, (param_name, default_value) in enumerate(param_items):
+                        # e_g / f_g 管板：h1 + h2 在界面上合并为参数 h（一行）
                         if (
                             selected_folder in ("e", "f")
                             and image_name_without_ext in ("e_g", "f_g")
-                            and param_name in ("c1", "c2")
+                            and param_name in ("h1", "h2")
                         ):
-                            # 只在遇到 c1 时生成一行 c，c2 行跳过
-                            if param_name == "c2":
+                            # 只在遇到 h1 时生成一行 h，h2 行跳过
+                            if param_name == "h2":
                                 continue
 
-                            name_item = QTableWidgetItem("c")
-                            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
-                            self.sheet_form_param_table.setItem(row, 0, name_item)
+                            merged_display = "h"
+                            merged_internal = "h"
 
-                            c1_raw = str(params.get("c1", "1.5")).strip() or "1.5"
-                            c2_raw = str(params.get("c2", "25")).strip() or "25"
+                            name_item = QTableWidgetItem(merged_display)
+                            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+                            # 标记内部键，确保后续 get_current_tube_form_data 仍按 h 逻辑拆分为 h1/h2
+                            try:
+                                name_item.setData(Qt.UserRole, merged_internal)
+                            except Exception:
+                                pass
+                            # 斜体显示（只影响界面）
+                            try:
+                                fnt = name_item.font()
+                                fnt.setItalic(True)
+                                name_item.setFont(fnt)
+                            except Exception:
+                                pass
+                            self.sheet_form_param_table.setItem(display_row, 0, name_item)
+
+                            h1_raw = str(params.get("h1", "1.5")).strip() or "1.5"
+                            h2_raw = str(params.get("h2", "25")).strip() or "25"
                             container = QWidget()
                             layout = QHBoxLayout(container)
                             layout.setContentsMargins(0, 0, 0, 0)
                             layout.setSpacing(2)
                             layout.setAlignment(Qt.AlignLeft)
 
-                            left_edit = QLineEdit(c1_raw, container)
+                            left_edit = QLineEdit(h1_raw, container)
                             left_edit.setFixedWidth(60)
                             left_edit.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
                             mid_label = QLabel("*δ和", container)
                             mid_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
-                            right_edit = QLineEdit(c2_raw, container)
+                            right_edit = QLineEdit(h2_raw, container)
                             right_edit.setFixedWidth(60)
                             right_edit.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
                             tail_label = QLabel("的较大值", container)
@@ -994,7 +1482,7 @@ class SheetFormPage(QWidget):
                             layout.addWidget(right_edit)
                             layout.addWidget(tail_label)
 
-                            # 用户手动编辑 c1/c2 时，改为蓝色
+                            # 用户手动编辑 h1/h2 时，改为蓝色
                             left_edit.textEdited.connect(
                                 lambda _txt, le=left_edit: le.setStyleSheet("color: rgb(70,130,180);")
                             )
@@ -1002,13 +1490,29 @@ class SheetFormPage(QWidget):
                                 lambda _txt, re=right_edit: re.setStyleSheet("color: rgb(70,130,180);")
                             )
 
-                            self.sheet_form_param_table.setCellWidget(row, 1, container)
+                            self.sheet_form_param_table.setCellWidget(display_row, 1, container)
+                            display_row += 1
                             continue
 
-                        # 通用逻辑：参数名列 - 只读
-                        name_item = QTableWidgetItem(param_name)
+                        # 通用逻辑：参数名列 - 只读（全改名后，param_name 即新代号）
+                        # 显示时把数字做成“下标”样式（仅影响界面，存储仍用原符号）
+                        display_param_name = str(param_name).strip()
+                        display_text = _display_with_subscript_digits(display_param_name)
+                        name_item = QTableWidgetItem(display_text)
                         name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
-                        self.sheet_form_param_table.setItem(row, 0, name_item)
+                        # 全改名模式：UserRole 保存新代号，用于后续保存/计算取参
+                        try:
+                            name_item.setData(Qt.UserRole, display_param_name)
+                        except Exception:
+                            pass
+                        # 斜体显示（只影响界面）——全改名后，所有符号统一斜体
+                        try:
+                            f = name_item.font()
+                            f.setItalic(True)
+                            name_item.setFont(f)
+                        except Exception:
+                            pass
+                        self.sheet_form_param_table.setItem(display_row, 0, name_item)
 
                         # 对于 e_f、f_f 节点，如果参数名为 a，则根据公式重新计算默认值
                         adjusted_value = default_value
@@ -1039,7 +1543,8 @@ class SheetFormPage(QWidget):
                         else:
                             value_item.setFlags(Qt.ItemIsEditable | Qt.ItemIsEnabled)
                         value_item.setForeground(QBrush(QColor(0, 0, 0)))
-                        self.sheet_form_param_table.setItem(row, 1, value_item)
+                        self.sheet_form_param_table.setItem(display_row, 1, value_item)
+                        display_row += 1
 
                     # 对于 e_b、e_c、f_b、f_c 节点，特殊处理最后一行为三列显示，并在表格下方添加说明文字
                     special_three_col_nodes = {
@@ -1068,9 +1573,17 @@ class SheetFormPage(QWidget):
                 finally:
                     self._sheet_form_programmatic_update = False
 
-                # 点击图片后同步更新父窗口的sheet_form_param_layout
+                # 点击图片后同步更新父窗口的sheet_form_param_layout，并重算布管限定圆 DL
+                # 程序化恢复（读库/切 tab 回显）时不重算，避免覆盖用户已选节点对应的 DL
                 if self.parent:
                     self.parent.sheet_form_param_layout = self.get_current_tube_form_data()
+                    if not skip_sync and hasattr(
+                        self.parent, "_sync_tube_sheet_snapshot_and_update_dl"
+                    ):
+                        try:
+                            self.parent._sync_tube_sheet_snapshot_and_update_dl()
+                        except Exception as sync_err:
+                            print(f"[sheet_form_page] 同步管板快照并重算 DL 失败: {sync_err}")
             else:
                 # 如果没有参数，显示空表格
                 self.sheet_form_param_table.setRowCount(0)
@@ -1081,6 +1594,8 @@ class SheetFormPage(QWidget):
     def _handle_image_double_click(self, event, index):
         """双击图片时，打开大图预览弹窗"""
         try:
+            if getattr(self, "_sheet_form_user_readonly", False):
+                return
             if index < 0 or index >= len(self.sheet_form_image_labels):
                 return
 
@@ -1137,6 +1652,8 @@ class SheetFormPage(QWidget):
     # -----------------------------------------------------------------
     def sheet_form_updates_image_path(self, index):
         print(f"[DEBUG] 调用 sheet_form_updates_image_path, index={index}")
+        if getattr(self, "_sheet_form_user_readonly", False):
+            return
         try:
             if index < 0:
                 return
@@ -1256,8 +1773,11 @@ class SheetFormPage(QWidget):
             for i in range(len(image_files)):
                 self.sheet_form_image_labels[i].show()
 
-            # 清空右侧参数区域
-            self._clear_param_layout()
+            # 仅切换管板型式（文件夹）时清空参数；同型式刷新（如只读开关）保留右侧表
+            prev_folder = getattr(self, "_sheet_form_folder_index", None)
+            self._sheet_form_folder_index = index
+            if prev_folder != index:
+                self._clear_param_layout()
 
         except Exception as e:
             print(f"更新图片路径时出错: {str(e)}")
@@ -1265,9 +1785,10 @@ class SheetFormPage(QWidget):
             traceback.print_exc()
 
         print(f"[DEBUG] 加载完成, 共加载 {len(self.sheet_form_current_images)} 张图片")
-
-
-
+        try:
+            self._sync_sheet_form_widgets_enabled()
+        except Exception:
+            pass
 
     def _safe_call(self, func):
         # 方法内容保持不变
@@ -1346,28 +1867,38 @@ class SheetFormPage(QWidget):
             value_widget = self.sheet_form_param_table.cellWidget(row, 1)
             
             if name_item and (value_item or value_widget):
-                param_name = name_item.text().strip()
+                # 全改名模式：参数名以 UserRole/显示内容为准（两者一致）
+                internal_name = ""
+                try:
+                    internal_name = name_item.data(Qt.UserRole)
+                except Exception:
+                    internal_name = ""
+                param_name = (
+                    str(internal_name).strip()
+                    if internal_name is not None and str(internal_name).strip() != ""
+                    else name_item.text().strip()
+                )
                 raw_value = value_item.text().strip() if value_item else ""
 
-                # e_g / f_g 管板的参数 c：从单元格内的两个 QLineEdit 读取数字，拆成 c1 / c2 存储
-                if plate_type in ("e_g", "f_g") and param_name == "c" and value_widget:
+                # e_g / f_g 管板的参数 h：从单元格内的两个 QLineEdit 读取数字，拆成 h1 / h2 存储
+                if plate_type in ("e_g", "f_g") and param_name == "h" and value_widget:
                     from PyQt5.QtWidgets import QLineEdit
 
                     edits = value_widget.findChildren(QLineEdit)
                     if len(edits) >= 2:
                         left_num = edits[0].text().strip() or "1.5"
                         right_num = edits[1].text().strip() or "25"
-                        # c 逻辑：保存为两条独立参数 c1 / c2
+                        # h 逻辑：保存为两条独立参数 h1 / h2
                         if param_name:
-                            full_params.append(("c1", left_num))
-                            full_params.append(("c2", right_num))
-                        # 已经添加 c1/c2，这一行不再追加下面的通用 full_params.append
+                            full_params.append(("h1", left_num))
+                            full_params.append(("h2", right_num))
+                        # 已经添加 h1/h2，这一行不再追加下面的通用 full_params.append
                         continue
                     else:
-                        # 控件异常时回退为默认 c1=1.5, c2=25
+                        # 控件异常时回退为默认 h1=1.5, h2=25
                         if param_name:
-                            full_params.append(("c1", "1.5"))
-                            full_params.append(("c2", "25"))
+                            full_params.append(("h1", "1.5"))
+                            full_params.append(("h2", "25"))
                         continue
                 else:
                     param_value = raw_value
@@ -1375,7 +1906,6 @@ class SheetFormPage(QWidget):
                 if param_name:
                     full_params.append((param_name, param_value))
 
-        print(f"🔍 [调试] 管板形式参数数量: {len(full_params)}")
         return full_params
 
     def get_DN_and_Di_from_parent(self):
