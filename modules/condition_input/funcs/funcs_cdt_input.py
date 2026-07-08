@@ -3813,6 +3813,26 @@ def dispatch_cell_validation(viewer, table, row, col, param_name, column_name, v
 
         item = table.item(row, col)
         if item:
+            try:
+                from modules.condition_input.funcs.funcs_cdt_input import compute_trail_default_grade, resolve_header_field_name
+                if column_name.endswith("技术等级") or column_name.endswith("合格级别"):
+                    side = "壳程" if "壳程" in column_name else "管程"
+                    field_type = "技术等级" if column_name.endswith("技术等级") else "合格级别"
+                    headers = {resolve_header_field_name(table, c): c for c in range(table.columnCount()) if table.horizontalHeaderItem(c)}
+                    method_col = headers.get("检测方法")
+                    ratio_col = headers.get(f"{side}_检测比例")
+                    if method_col is not None and ratio_col is not None:
+                        m_item = table.item(row, method_col)
+                        r_item = table.item(row, ratio_col)
+                        m_val = m_item.text().strip() if m_item else ""
+                        r_val = r_item.text().strip() if r_item else ""
+                        if m_val and r_val:
+                            dyn_default = compute_trail_default_grade(m_val, r_val, field_type)
+                            if dyn_default:
+                                item.setData(Qt.UserRole + 2, dyn_default)
+            except Exception as e:
+                print(f"动态计算检测默认值失败: {e}")
+
             default_val = item.data(Qt.UserRole + 2)
             if default_val:
                 if column_name.endswith("技术等级") and is_grade_lower(value, default_val):
@@ -5810,7 +5830,7 @@ def compute_trail_default_grade(method: str, ratio_str: str, field_type: str) ->
 
 """技术等级和合格级别不能低于默认值"""
 GRADE_ORDER = {"AB": 1, "B": 2, "C": 3}
-QUALIFY_ORDER = {"Ⅲ": 1, "Ⅱ": 2, "Ⅰ": 3}
+QUALIFY_ORDER = {"Ⅲ": 1, "III": 1, "iii": 1, "Ⅱ": 2, "II": 2, "ii": 2, "Ⅰ": 3, "I": 3, "i": 3}
 
 
 def is_grade_lower(user_val: str, default_val: str) -> bool:
@@ -5818,7 +5838,9 @@ def is_grade_lower(user_val: str, default_val: str) -> bool:
 
 
 def is_qualify_lower(user_val: str, default_val: str) -> bool:
-    return QUALIFY_ORDER.get(user_val, 0) < QUALIFY_ORDER.get(default_val, 0)
+    u_val = str(user_val).strip() if user_val else ""
+    d_val = str(default_val).strip() if default_val else ""
+    return QUALIFY_ORDER.get(u_val, 0) < QUALIFY_ORDER.get(d_val, 0)
 
 
 """下拉框定义"""

@@ -2186,13 +2186,15 @@ def compute_trail_default_grade(method: str, ratio_str: str, field_type: str) ->
 
 """技术等级和合格级别不能低于默认值"""
 GRADE_ORDER = {"AB": 1, "B": 2, "C": 3}
-QUALIFY_ORDER = {"Ⅲ": 1, "Ⅱ": 2, "Ⅰ": 3}
+QUALIFY_ORDER = {"Ⅲ": 1, "III": 1, "iii": 1, "Ⅱ": 2, "II": 2, "ii": 2, "Ⅰ": 3, "I": 3, "i": 3}
 
 def is_grade_lower(user_val: str, default_val: str) -> bool:
     return GRADE_ORDER.get(user_val, 0) < GRADE_ORDER.get(default_val, 0)
 
 def is_qualify_lower(user_val: str, default_val: str) -> bool:
-    return QUALIFY_ORDER.get(user_val, 0) < QUALIFY_ORDER.get(default_val, 0)
+    u_val = str(user_val).strip() if user_val else ""
+    d_val = str(default_val).strip() if default_val else ""
+    return QUALIFY_ORDER.get(u_val, 0) < QUALIFY_ORDER.get(d_val, 0)
 
 
 """下拉框定义"""

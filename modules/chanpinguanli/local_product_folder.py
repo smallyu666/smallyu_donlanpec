@@ -27,6 +27,7 @@ _CHANPINGUANLI_DIR = os.path.dirname(os.path.abspath(__file__))
 _TEMPLATE_CONDITION = os.path.join(_CHANPINGUANLI_DIR, "条件输入数据表.xlsx")
 _TEMPLATE_CONTAINER_CONDITION = os.path.join(_CHANPINGUANLI_DIR, "容器条件输入数据表.xlsx")
 _TEMPLATE_NOZZLE = os.path.join(_CHANPINGUANLI_DIR, "管口导入模板.xlsx")
+_TEMPLATE_CONTAINER_NOZZLE = os.path.join(_CHANPINGUANLI_DIR, "容器管口导入模板.xlsx")
 
 _BASE_REQUIRED_FILES = ("pro_id.csv", "条件输入数据表.xlsx")
 _NOZZLE_REQUIRED_FILE = "管口导入模板.xlsx"
@@ -77,11 +78,21 @@ def _condition_template_path(product_type: str) -> str:
     return _TEMPLATE_CONDITION
 
 
+def _nozzle_template_path(product_type: str) -> str:
+    """按产品类型返回程序内管口导入 xlsx 模板路径（本地文件名均为管口导入模板.xlsx）。"""
+    if _is_container_product_type(product_type):
+        if os.path.isfile(_TEMPLATE_CONTAINER_NOZZLE):
+            return _TEMPLATE_CONTAINER_NOZZLE
+        print(
+            f"[_nozzle_template_path] 未找到容器管口模板，回退通用模板: {_TEMPLATE_CONTAINER_NOZZLE}"
+        )
+    return _TEMPLATE_NOZZLE
+
+
 def _required_local_files(product_type: str) -> tuple:
-    """容器产品不要求管口导入模板。"""
+    """本地三文件：pro_id、管口导入模板、条件输入表（容器/换热器模板内容不同）。"""
     files = list(_BASE_REQUIRED_FILES)
-    if not _is_container_product_type(product_type):
-        files.insert(1, _NOZZLE_REQUIRED_FILE)
+    files.insert(1, _NOZZLE_REQUIRED_FILE)
     return tuple(files)
 
 # 0509新修改--产品恢复时同时恢复项目id.csv
@@ -202,7 +213,7 @@ def list_missing_local_product_files(product_id):
 def restore_local_product_files(parent, product_id) -> tuple:
     """
     重建目录与必需本地文件；有条件输入库数据时填充 条件输入数据表.xlsx。
-    容器产品使用容器条件输入模板，且不恢复管口导入模板。
+    容器产品使用容器条件输入模板与容器管口导入模板（本地文件名仍为管口导入模板.xlsx）。
     返回 (success: bool, message: str)
     """
     pid = product_id
@@ -211,13 +222,13 @@ def restore_local_product_files(parent, product_id) -> tuple:
         return False, err or "无法解析产品本地文件夹"
 
     product_type = _get_product_type(pid)
-    is_container = _is_container_product_type(product_type)
     condition_template = _condition_template_path(product_type)
+    nozzle_template = _nozzle_template_path(product_type)
 
     if not os.path.isfile(condition_template):
         return False, f"缺少程序内模板：{condition_template}"
-    if not is_container and not os.path.isfile(_TEMPLATE_NOZZLE):
-        return False, f"缺少程序内模板：{_TEMPLATE_NOZZLE}"
+    if not os.path.isfile(nozzle_template):
+        return False, f"缺少程序内模板：{nozzle_template}"
 
     try:
         os.makedirs(folder, exist_ok=True)
@@ -229,9 +240,8 @@ def restore_local_product_files(parent, product_id) -> tuple:
 
     try:
         shutil.copy2(condition_template, xlsx_path)
-        if not is_container:
-            nozzle_path = os.path.join(folder, _NOZZLE_REQUIRED_FILE)
-            shutil.copy2(_TEMPLATE_NOZZLE, nozzle_path)
+        nozzle_path = os.path.join(folder, _NOZZLE_REQUIRED_FILE)
+        shutil.copy2(nozzle_template, nozzle_path)
         with open(pro_path, "w", encoding="utf-8") as f:
             f.write(str(pid).strip())
     except Exception as e:

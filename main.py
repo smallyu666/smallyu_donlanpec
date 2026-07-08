@@ -584,6 +584,7 @@ def get_product_form_from_db(product_id: str) -> str:
                 # 如果是 NEN(Head)，就返回 NEN(Head)
                 print(f"    ↳ 逻辑转换: 保持为 'NEN(Head)'")
                 return 'NEN(Head)'
+            # 0704新修改-新增容器单腔型、双腔型产品型式
             if raw_product_form in ['单腔型', '双腔型']:
                 print(f"    ↳ 逻辑转换: 保持为 '{raw_product_form}'")
                 return raw_product_form
@@ -721,6 +722,12 @@ class MainWindow(QtWidgets.QMainWindow):
         # 将当前实例赋值给全局变量，这样任何地方都能稳定地访问到主窗口
         global APP_MAIN_WINDOW
         APP_MAIN_WINDOW = self
+        # 容器产品隐藏管束设计模块
+        import modules.chanpinguanli.bianl as bianl
+        bianl.app_top_window = self
+
+        from modules.chanpinguanli.tube_bundle_toolbar import install as install_tube_bundle_toolbar
+        install_tube_bundle_toolbar(self)
 
         # uic.loadUi(resource_path("main_viewer333.ui"), self)
         uic.loadUi(resource_path("main_viewer333_new.ui"), self)
@@ -1156,6 +1163,13 @@ class MainWindow(QtWidgets.QMainWindow):
                     QMessageBox.information(self, "提示", "产品还未定义，请先定义！")
                     return
 
+        # 容器产品隐藏管束设计模块
+        if title == "管束设计":
+            from modules.chanpinguanli.tube_bundle_toolbar import should_block_tube_bundle_tab
+            current_product_id = getattr(bianl, "current_product_id", None)
+            if should_block_tube_bundle_tab(current_product_id):
+                return
+
         try:
             widget = widget_class()
             self.open_tab(title, widget)
@@ -1214,6 +1228,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if not product_id:
             return False
 
+        # 容器产品隐藏管束设计模块
+        from modules.chanpinguanli.tube_bundle_toolbar import should_skip_tube_bundle_prerequisite
+        skip_tube_bundle = should_skip_tube_bundle_prerequisite(product_id)
+
         # ==================== 【核心修改：为所有查询添加别名】 ====================
         # 为所有 COUNT(*) 和计算结果添加 `AS count` 别名，以便按名称访问
         prerequisite_checks = {
@@ -1261,6 +1279,10 @@ class MainWindow(QtWidgets.QMainWindow):
             cursor = conn.cursor()
 
             for module_name, check_info in prerequisite_checks.items():
+                # 容器产品隐藏管束设计模块
+                if skip_tube_bundle and module_name.startswith("管束设计"):
+                    print(f"[DEBUG][DB_CHECK] 容器产品跳过: '{module_name}'")
+                    continue
                 print(f"[DEBUG][DB_CHECK] 正在检查模块: '{module_name}'")
                 query = check_info["query"]
                 params_count = check_info["params_count"]
@@ -1416,8 +1438,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
                 # 3. 如果数据库中的数据不完整，则提示用户并阻止打开
                 if not prerequisites_met_in_db:
-                    QMessageBox.warning(self, "操作提示",
-                                        "请先完成【条件输入】、【元件定义】、【管口及附件定义】和【管束设计】模块的数据定义与保存！\n\n")
+                    # 容器产品隐藏管束设计模块
+                    from modules.chanpinguanli.tube_bundle_toolbar import prerequisites_hint_message
+                    QMessageBox.warning(
+                        self, "操作提示",
+                        prerequisites_hint_message(current_product_id),
+                    )
                     return
 
         # 检查是否从条件输入切换到可切换的模块
@@ -1510,8 +1536,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
                     # 3. 如果数据库中的数据不完整，则提示用户并阻止切换
                     if not prerequisites_met_in_db:
-                        QMessageBox.warning(self, "操作提示",
-                                            "请先完成【条件输入】、【元件定义】、【管口及附件定义】和【管束设计】模块的数据定义与保存！\n\n")
+                        # 容器产品隐藏管束设计模块
+                        from modules.chanpinguanli.tube_bundle_toolbar import prerequisites_hint_message
+                        QMessageBox.warning(
+                            self, "操作提示",
+                            prerequisites_hint_message(current_product_id),
+                        )
                         # 阻止标签页切换，界面返回上一个标签页
                         self.tab_widget.blockSignals(True)
                         self.tab_widget.setCurrentIndex(last_index)

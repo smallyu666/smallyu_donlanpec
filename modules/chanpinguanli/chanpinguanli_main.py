@@ -12,7 +12,9 @@ from PyQt5.QtGui import QPixmap
 import shutil
 
 import modules.chanpinguanli.bianl as bianl
+from modules.chanpinguanli import tube_bundle_toolbar as tbt
 # 按钮文件导入
+
 
 # 0506新修改--产品信息非法字符约束
 class TableLineEditFilter(QObject):
@@ -1117,6 +1119,8 @@ def on_product_row_clicked(row, column):
     # ✅ 每次点击统一刷新高亮：
     highlight_row_except_current(row, column)
 
+    tbt.refresh_for_product(bianl.product_id)
+
 
 # 初始的
 def highlight_row_except_current(row, col):
@@ -1847,22 +1851,37 @@ def confirm_product_definition():
         if row not in bianl.product_table_row_status or not isinstance(bianl.product_table_row_status[row], dict):
             bianl.product_table_row_status[row] = {}
         bianl.product_table_row_status[row]["definition_status"] = "view"
+        if bianl.product_id:
+            bianl.product_table_row_status[row]["product_id"] = bianl.product_id
         print(f"第 {row} 行定义状态已更新: view（保存成功）")
 
         if is_first_time:
-            # 如果是容器类型，则用容器专属的条件输入模板覆盖默认模板
-            if product_type in ["容器", "立式容器", "卧式容器"] and product_folder_abs and os.path.exists(product_folder_abs):
+            # 容器类型：首次定义保存时用容器专属模板覆盖新建时的默认本地文件
+            from modules.chanpinguanli import local_product_folder as lpf
+
+            if (
+                lpf._is_container_product_type(product_type)
+                and product_folder_abs
+                and os.path.exists(product_folder_abs)
+            ):
                 try:
-                    import shutil
-                    container_template_path = os.path.join(os.path.dirname(__file__), "容器条件输入数据表.xlsx")
+                    condition_template = lpf._condition_template_path(product_type)
                     target_xlsx_path = os.path.join(product_folder_abs, "条件输入数据表.xlsx")
-                    if os.path.exists(container_template_path):
-                        shutil.copy(container_template_path, target_xlsx_path)
-                        print(f"[confirm_product_definition] 已用容器模板覆盖: {target_xlsx_path}")
+                    if os.path.exists(condition_template):
+                        shutil.copy(condition_template, target_xlsx_path)
+                        print(f"[confirm_product_definition] 已用容器条件模板覆盖: {target_xlsx_path}")
                     else:
-                        print(f"[confirm_product_definition] 未找到容器模板文件: {container_template_path}")
+                        print(f"[confirm_product_definition] 未找到容器条件模板: {condition_template}")
+
+                    nozzle_template = lpf._nozzle_template_path(product_type)
+                    target_nozzle_path = os.path.join(product_folder_abs, lpf._NOZZLE_REQUIRED_FILE)
+                    if os.path.exists(nozzle_template):
+                        shutil.copy(nozzle_template, target_nozzle_path)
+                        print(f"[confirm_product_definition] 已用容器管口模板覆盖: {target_nozzle_path}")
+                    else:
+                        print(f"[confirm_product_definition] 未找到容器管口模板: {nozzle_template}")
                 except Exception as e_copy:
-                    print(f"[confirm_product_definition] 覆盖容器模板失败: {e_copy}")
+                    print(f"[confirm_product_definition] 覆盖容器本地模板失败: {e_copy}")
 
             # 只有首次需要把必填项锁死（类型/形式）
             lock_combo(bianl.product_type_combo)
@@ -1880,6 +1899,7 @@ def confirm_product_definition():
         bianl.main_window.line_tip.setStyleSheet("color: black;")
         # 5秒后自动清除提示1014
         QTimer.singleShot(5000, clear_line_tip)
+        tbt.refresh_for_product(bianl.product_id, product_type_hint=product_type)
         return True
 
     except Exception as e:
@@ -2102,19 +2122,19 @@ def _prepare_new_product_folder(
         from modules.chanpinguanli import local_product_folder as lpf
 
         os.makedirs(target_folder, exist_ok=True)
-        # 源目录缺失时按产品类型补齐模板（容器用容器条件输入表，且不复制管口模板）
+        # 源目录缺失时按产品类型补齐模板（容器/换热器使用各自的条件表与管口模板）
         condition_template = lpf._condition_template_path(product_type)
         if os.path.exists(condition_template):
             shutil.copy(
                 condition_template,
                 os.path.join(target_folder, "条件输入数据表.xlsx"),
             )
-        if not lpf._is_container_product_type(product_type):
-            if os.path.exists(lpf._TEMPLATE_NOZZLE):
-                shutil.copy(
-                    lpf._TEMPLATE_NOZZLE,
-                    os.path.join(target_folder, lpf._NOZZLE_REQUIRED_FILE),
-                )
+        nozzle_template = lpf._nozzle_template_path(product_type)
+        if os.path.exists(nozzle_template):
+            shutil.copy(
+                nozzle_template,
+                os.path.join(target_folder, lpf._NOZZLE_REQUIRED_FILE),
+            )
 
     with open(os.path.join(target_folder, "pro_id.csv"), "w", encoding="utf-8") as f:
         f.write(str(new_product_id))
@@ -3163,6 +3183,9 @@ def load_last_project():
             log_file.write("\n\n")
     # 在load_last_project函数的最后添加
     print(f"[验证] 加载完成后，bianl.current_project_id = {bianl.current_project_id}")
+    tbt.refresh_for_product(
+        getattr(bianl, "product_id", None) or getattr(bianl, "current_product_id", None)
+    )
 
 # yxx改 高亮这一列
 # def highlight_column(col):
