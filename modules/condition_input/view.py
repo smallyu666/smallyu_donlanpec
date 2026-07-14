@@ -149,7 +149,7 @@ class DesignConditionInputViewer(QWidget):
         except Exception:
             self._mode_orders = {}
 
-        self._default_mode_name = "设计模式"
+        self._default_mode_name = "简洁输入"
         combo = getattr(self, "combo_mode", None)  # 直接取 UI 里的 combo_mode
 
         if combo is None:
