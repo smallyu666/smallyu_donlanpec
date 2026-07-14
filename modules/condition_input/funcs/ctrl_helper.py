@@ -117,7 +117,15 @@ class SmartDelegate(QStyledItemDelegate):
                     editor.currentTextChanged.connect(lambda *_: self.commitData.emit(editor))
             except Exception:
                 pass
+            # 单击进入编辑后立即弹出下拉菜单
+            QTimer.singleShot(0, editor.showPopup)
         return editor
+
+    def paint(self, painter, option, index):
+        # 表格实际使用的是 SmartDelegate；下拉箭头绘制需转到 MultiParamComboDelegate
+        if self.is_dropdown_cell(index) and self.dropdown_delegate:
+            return self.dropdown_delegate.paint(painter, option, index)
+        return super().paint(painter, option, index)
 
     def eventFilter(self, obj, event): #--新加
         # 拦截下拉框的滚轮事件
@@ -389,11 +397,11 @@ def enable_full_undo(target_widget, parent_for_stack, mode: str = "design", drop
     target_widget.setItemDelegate(delegate)
     disable_keyboard_search(target_widget)
     # 0506新修改-条件输入双击编辑+键盘键入恢复
-    # 只启用双击编辑
+    # 只启用双击编辑（普通格）；有下拉配置时另装过滤器，仅下拉格单击进编辑
     target_widget.setEditTriggers(QTableWidget.DoubleClicked)
-    # 注释掉单击编辑过滤器，禁用单击编辑功能
-    # filter = DropDownClickOnlyFilter(target_widget, delegate)
-    # target_widget.viewport().installEventFilter(filter)
+    if dropdown_config:
+        click_filter = DropDownClickOnlyFilter(target_widget, delegate)
+        target_widget.viewport().installEventFilter(click_filter)
 
     # ✅ 安装回车跳转事件过滤器
     target_widget.installEventFilter(ReturnKeyJumpFilter(target_widget))
@@ -420,30 +428,14 @@ class DropDownClickOnlyFilter(QObject):
         cur = self.table.currentIndex()
         return cur.isValid() and cur.row() == index.row() and cur.column() == index.column()
 
-    def _single_click_edit_line_cell(self, index):
-        """非下拉、但可编辑的单元格：单击即 edit（与下拉格一致）。"""
-        if not index.isValid() or self._already_editing(index):
-            return
-        # 设计数据第 1 列：参数名 + 多工况角标，勿抢点击
-        if self.table.objectName() == "tableWidget_design_data" and index.column() == 1:
-            return
-        item = self.table.item(index.row(), index.column())
-        if item is None or not (item.flags() & Qt.ItemIsEditable):
-            return
-        self.table.setCurrentIndex(index)
-        self.table.edit(index)
-
     def eventFilter(self, obj, event):
+        # 仅下拉格单击进入编辑；普通可编辑格仍走双击，避免影响原有输入行为
         if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
-            pos = event.pos()
-            index = self.table.indexAt(pos)
-            if index.isValid():
-                if getattr(self.smart_delegate, "is_dropdown_cell", lambda _i: False)(index):
-                    if not self._already_editing(index):
-                        self.table.setCurrentIndex(index)
-                        self.table.edit(index)
-                else:
-                    self._single_click_edit_line_cell(index)
+            index = self.table.indexAt(event.pos())
+            if index.isValid() and getattr(self.smart_delegate, "is_dropdown_cell", lambda _i: False)(index):
+                if not self._already_editing(index):
+                    self.table.setCurrentIndex(index)
+                    self.table.edit(index)
         return super().eventFilter(obj, event)
 
 class DeleteKeyFilter(QObject):

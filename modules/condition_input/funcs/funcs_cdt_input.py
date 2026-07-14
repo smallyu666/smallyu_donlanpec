@@ -16,9 +16,9 @@ from typing import Dict, Tuple
 import pymysql
 from PyQt5.QtWidgets import (QTableWidgetItem, QTableWidget, QHeaderView, QWidget, QAbstractButton,
                              QMessageBox, QUndoStack, QFileDialog, QComboBox, QStyledItemDelegate, QShortcut,
-                             QTabWidget, QStackedWidget, QLabel)
+                             QTabWidget, QStackedWidget, QLabel, QStyleOptionViewItem, QStyle)
 from PyQt5.QtCore import Qt, QTimer, QObject, QEvent
-from PyQt5.QtGui import QColor, QStandardItemModel, QStandardItem, QBrush, QKeySequence
+from PyQt5.QtGui import QColor, QStandardItemModel, QStandardItem, QBrush, QKeySequence, QPixmap
 import re
 import ast
 import os
@@ -5847,11 +5847,24 @@ def is_qualify_lower(user_val: str, default_val: str) -> bool:
 
 
 class MultiParamComboDelegate(QStyledItemDelegate):
+    _arrow_pixmap = None
+
     def __init__(self, config: dict, parent=None, viewer=None, undo_stack=None):
         super().__init__(parent)
         self.config = config  # {参数名: {"type": "single"|"multi", "options": [...], "editable": bool}}
         self.viewer = viewer
         self.undo_stack = undo_stack
+
+    @classmethod
+    def _get_arrow_pixmap(cls):
+        if cls._arrow_pixmap is None:
+            path = os.path.join(os.getcwd(), "modules", "chanpinguanli", "icons", "下箭头.png")
+            cls._arrow_pixmap = QPixmap(path)
+        return cls._arrow_pixmap
+
+    @staticmethod
+    def _arrow_image_path():
+        return os.path.join(os.getcwd(), "modules", "chanpinguanli", "icons", "下箭头.png").replace("\\", "/")
 
     def _get_config(self, index):
         row, col = index.row(), index.column()
@@ -5861,18 +5874,55 @@ class MultiParamComboDelegate(QStyledItemDelegate):
         param_name = param_item.text().strip()
         return self.config.get(param_name), param_name
 
+    def paint(self, painter, option, index):
+        conf, _ = self._get_config(index)
+        if not conf:
+            return super().paint(painter, option, index)
+
+        # 编辑中由 QComboBox 自带箭头，避免叠画
+        if option.state & QStyle.State_Editing:
+            return super().paint(painter, option, index)
+
+        # 文字仍按整格居中绘制（勿缩小 rect，否则会相对整格偏左），箭头叠在右侧
+        super().paint(painter, option, index)
+
+        pm = self._get_arrow_pixmap()
+        if not pm.isNull():
+            size = 18
+            scaled = pm.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            x = option.rect.right() - size - 4
+            y = option.rect.top() + (option.rect.height() - size) // 2
+            painter.drawPixmap(x, y, scaled)
+
     def createEditor(self, parent, option, index):
         conf, _ = self._get_config(index)
         if not conf:
             return super().createEditor(parent, option, index)
 
+        arrow_path = self._arrow_image_path()
+        arrow_style = f"""
+            QComboBox::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 24px;
+                border: none;
+            }}
+            QComboBox::down-arrow {{
+                image: url("{arrow_path}");
+                width: 18px;
+                height: 18px;
+            }}
+        """
+
         if conf["type"] == "multi":
             editor = CheckableComboBox(conf["options"], parent)
+            editor.setStyleSheet(arrow_style)
             return editor
         else:
             combo = QComboBox(parent)
             combo.addItems(conf["options"])
             combo.setEditable(conf.get("editable", False))
+            combo.setStyleSheet(arrow_style)
             return combo
 
     def setEditorData(self, editor, index):
