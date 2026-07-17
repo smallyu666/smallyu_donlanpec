@@ -630,7 +630,7 @@ QPushButton:hover {
             <item>
              <widget class="QLabel" name="design_mode_label">
               <property name="text">
-               <string>模式    ：</string>
+               <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p/&gt;&lt;/body&gt;&lt;/html&gt;</string>
               </property>
              </widget>
             </item>
@@ -658,6 +658,13 @@ QPushButton:hover {
              </widget>
             </item>
            </layout>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_5">
+            <property name="text">
+             <string>    </string>
+            </property>
+           </widget>
           </item>
           <item>
            <layout class="QHBoxLayout" name="horizontalLayout" stretch="2,8">
