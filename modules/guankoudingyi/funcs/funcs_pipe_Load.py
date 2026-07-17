@@ -98,7 +98,7 @@ class NumericValueDelegate(QStyledItemDelegate):
 """读取局部应力计算类型的下拉框内容"""
 def get_local_stress_calc_types_from_db():
     """
-    从元件库的管口载荷类型表中读取局部应力计算类型列的所有不重复值
+    从元件库的管口载荷图配置表中读取局部应力计算类型列的所有不重复值
     :return: 局部应力计算类型列表
     """
     conn = None
@@ -109,7 +109,7 @@ def get_local_stress_calc_types_from_db():
         
         sql = """
             SELECT DISTINCT 局部应力计算类型 
-            FROM 管口载荷类型表 
+            FROM 管口载荷图配置表
             WHERE 局部应力计算类型 IS NOT NULL AND 局部应力计算类型 != ''
             
         """
@@ -147,7 +147,7 @@ def get_load_image_path_by_calc_type(calc_type):
         
         sql = """
             SELECT 载荷示意图 
-            FROM 管口载荷类型表 
+            FROM 管口载荷图配置表
             WHERE 局部应力计算类型 = %s
             LIMIT 1
         """
@@ -189,7 +189,7 @@ def get_load_calc_image_path_by_calc_type(calc_type):
         
         sql = """
             SELECT 载荷计算图 
-            FROM 管口载荷类型表 
+            FROM 管口载荷图配置表
             WHERE 局部应力计算类型 = %s
             LIMIT 1
         """

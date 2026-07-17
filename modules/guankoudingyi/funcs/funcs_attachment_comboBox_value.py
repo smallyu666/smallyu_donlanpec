@@ -861,7 +861,7 @@ def handle_attachment_cell_changed(stats_widget, row, column, product_id):
                     if not lock_item:
                         lock_item = QTableWidgetItem()
                         table.setItem(row, lock_col, lock_item)
-                    lock_item.setText("—")
+                    lock_item.setText("-")
                     lock_item.setTextAlignment(Qt.AlignCenter)
                     lock_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             finally:

@@ -8,6 +8,7 @@ from modules.guankoudingyi.funcs.funcs_pipe_table import (
     get_next_pipe_id_runtime,
     ensure_hidden_attachment_maps,
     get_next_attachment_id_runtime,
+    get_pipe_column_map,
 )
 
 
@@ -28,8 +29,11 @@ def save_all_pipe_data(stats_widget):
     if not product_id:
         QMessageBox.warning(stats_widget, "错误", "产品ID不能为空")
         return
-        # ===== 保存前校验：“管口功能”必填（仅校验已填写“管口代号”的行） =====
-    if table is not None:
+
+    is_container = getattr(stats_widget, 'is_container_product', False)
+
+    # ===== 保存前校验：“管口功能”必填（仅换热器；容器不校验） =====
+    if table is not None and not is_container:
         missing_codes = []
         last_row = table.rowCount() - 1  # 排除最后空行
         for row in range(last_row):
@@ -47,28 +51,7 @@ def save_all_pipe_data(stats_widget):
             return
         # ===== 校验通过，继续原有保存逻辑 =====
 
-
-    # 定义列映射
-    column_map = {
-        1: "管口代号",
-        2: "管口功能",
-        3: "管口用途",
-        4: "公称尺寸",
-        5: "法兰标准",
-        6: "压力等级",
-        7: "法兰型式",
-        8: "密封面型式",
-        9: "焊端规格",
-        10: "管口所属元件",
-        11: "轴向定位基准",
-        12: "轴向定位距离",
-        13: "轴向夹角（°）",
-        14: "周向方位（°）",
-        15: "偏心距",
-        16: "外伸高度",
-        17: "管口附件",
-        18: "管口载荷"
-    }
+    column_map = get_pipe_column_map(is_container)
 
     conn = None
     cur = None
@@ -97,6 +80,7 @@ def save_all_pipe_data(stats_widget):
 
         # —— 2) 逐行 Upsert（新增/修改）——
         last_row = table.rowCount() - 1
+        display_order_seq = 1
         for row in range(last_row):  # 排除最后空行
             code_item = table.item(row, 1)
             port_code = code_item.text().strip() if code_item else ""
@@ -112,6 +96,10 @@ def save_all_pipe_data(stats_widget):
                 # 其他字段保持原有逻辑，空字符串不保存
                 if txt != "" or field == "管口附件":
                     row_data[field] = txt
+
+            row_data["界面显示顺序"] = display_order_seq
+            stats_widget.row_display_order[row] = display_order_seq
+            display_order_seq += 1
 
             # 获取/兜底分配 管口ID（运行期分配，确认时才落库）
             hid = stats_widget.row_hidden_pipe_id.get(row)
