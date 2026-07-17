@@ -16,7 +16,8 @@ from typing import Dict, Tuple
 import pymysql
 from PyQt5.QtWidgets import (QTableWidgetItem, QTableWidget, QHeaderView, QWidget, QAbstractButton,
                              QMessageBox, QUndoStack, QFileDialog, QComboBox, QStyledItemDelegate, QShortcut,
-                             QTabWidget, QStackedWidget, QLabel, QStyleOptionViewItem, QStyle)
+                             QTabWidget, QStackedWidget, QLabel, QStyleOptionViewItem, QStyle, QAbstractItemDelegate,
+                             QLineEdit)
 from PyQt5.QtCore import Qt, QTimer, QObject, QEvent
 from PyQt5.QtGui import QColor, QStandardItemModel, QStandardItem, QBrush, QKeySequence, QPixmap
 import re
@@ -6279,11 +6280,17 @@ class TrailTableComboDelegate(QStyledItemDelegate):
                     break
 
         if not options:
-            return super().createEditor(parent, option, index)
+            editor = super().createEditor(parent, option, index)
+            if editor is not None:
+                editor.installEventFilter(self)
+                QTimer.singleShot(0, lambda e=editor: e.installEventFilter(self))
+            return editor
 
         combo = QComboBox(parent)
         combo.addItems(options)
         combo.setEditable(False)
+        combo.installEventFilter(self)
+        QTimer.singleShot(0, lambda e=combo: e.installEventFilter(self))
 
         # ✅ 添加 Delete / Backspace 快捷键
         for key in (Qt.Key_Delete, Qt.Key_Backspace):
@@ -6292,12 +6299,35 @@ class TrailTableComboDelegate(QStyledItemDelegate):
 
         return combo
 
+    def eventFilter(self, obj, event):
+        # 检测表编辑态 Tab：只跳到可编辑单元格
+        if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Tab, Qt.Key_Backtab):
+            from modules.condition_input.funcs.ctrl_helper import jump_table_tab, _tab_key_is_forward
+            forward = _tab_key_is_forward(event)
+            table = self.parent()
+            cur = table.currentIndex() if table is not None else None
+            from_row = cur.row() if cur is not None and cur.isValid() else 0
+            from_col = cur.column() if cur is not None and cur.isValid() else 0
+            self.commitData.emit(obj)
+            self.closeEditor.emit(obj, QAbstractItemDelegate.NoHint)
+            QTimer.singleShot(
+                0,
+                lambda r=from_row, c=from_col, f=forward, t=table: jump_table_tab(t, f, r, c),
+            )
+            return True
+        return super().eventFilter(obj, event)
+
     def setModelData(self, editor, model, index):
         method_item = index.sibling(index.row(), 1)
         method_name = method_item.data().strip() if method_item and method_item.data() else ""
 
         col = index.column()
-        new_val = editor.currentText()
+        if isinstance(editor, QComboBox):
+            new_val = editor.currentText()
+        elif isinstance(editor, QLineEdit):
+            new_val = editor.text()
+        else:
+            new_val = editor.currentText() if hasattr(editor, "currentText") else str(index.data() or "")
         old_val = index.data()
         model.setData(index, new_val)
 
