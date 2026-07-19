@@ -4090,7 +4090,7 @@ def dispatch_cell_validation(viewer, table, row, col, param_name, column_name, v
         param_name_for_validation = param_name
         column_name_for_validation = column_name
         try:
-            from modules.condition_input.funcs.funcs_def_check import get_param_name as _get_param_name
+            # from modules.condition_input.funcs.funcs_def_check import get_param_name as _get_param_name
 
             if not str(param_name or "").strip():
                 param_name_for_validation = _get_param_name(table, row)
@@ -5438,6 +5438,19 @@ def save_local_condition_file(product_id: int, viewer: QWidget, local_path_overr
     if is_file_locked(local_path):
         show_warning_dialog(viewer, "文件占用", f"请先关闭本地文件：\n{local_path}\n然后重试保存。")
         return False  # 阻止继续
+
+    # 容器产品：保存前检查「管口导入模板.xlsx」是否占用，避免条件表已写完却无法同步，
+    # 并保证切换界面 / 关闭标签时与条件表占用一样被拦截。
+    if is_container_viewer(viewer):
+        nozzle_path = os.path.join(os.path.dirname(local_path), "管口导入模板.xlsx")
+        if os.path.isfile(nozzle_path) and is_file_locked(nozzle_path):
+            show_warning_dialog(
+                viewer,
+                "文件占用",
+                f"请先关闭本地文件：\n{nozzle_path}\n然后重试保存。",
+            )
+            return False
+
     try:
         wb = load_workbook(local_path)
     except FileNotFoundError:
@@ -5550,6 +5563,163 @@ def save_local_condition_file(product_id: int, viewer: QWidget, local_path_overr
     print(f"✅ 本地条件数据表已成功保存到: {local_path}")
     if viewer is not None:
         setattr(viewer, "_local_condition_xlsx_missing", False)
+
+    # 容器产品：同步公称直径 / 容器壳体长度 → 本地「管口导入模板.xlsx」
+    if is_container_viewer(viewer):
+        nozzle_dir = os.path.dirname(local_path)
+        try:
+            if not sync_container_nozzle_template_dims(
+                product_id, viewer, folder_override=nozzle_dir, show_lock_dialog=True
+            ):
+                # 保存前已做过占用检查；此处失败多为竞态再次占用，仍返回 False 以阻断关闭/切换
+                return False
+        except Exception as e:
+            print(f"[条件输入保存] 同步管口导入模板尺寸失败: {e}")
+            show_warning_dialog(
+                viewer,
+                "同步失败",
+                f"条件输入数据表已保存，但同步管口导入模板失败：\n{e}",
+            )
+            return False
+
+    return True
+
+
+def _excel_cell_value_from_text(text: str):
+    """条件输入界面文本转为写入 Excel 的值；空串写空，纯数字尽量写成数值。"""
+    s = (text or "").strip()
+    if not s:
+        return None
+    try:
+        if "." in s or "e" in s.lower():
+            return float(s)
+        return int(s)
+    except ValueError:
+        return s
+
+
+def _find_nozzle_param_value_col(sheet) -> int:
+    """在表头行查找首个「管口参数值」列（1-based）；找不到则默认 F 列。"""
+    for row in range(1, min(sheet.max_row, 5) + 1):
+        for col in range(1, min(sheet.max_column, 20) + 1):
+            val = sheet.cell(row=row, column=col).value
+            if val is not None and "管口参数值" in str(val).strip():
+                return col
+    return 6
+
+
+def _find_sheet_row_by_seq(sheet, seq: int) -> int:
+    """按 A 列「序号」查找 Excel 行号（1-based）；未找到返回 -1。"""
+    target = str(seq)
+    for row in range(1, sheet.max_row + 1):
+        cell_val = sheet.cell(row=row, column=1).value
+        if cell_val is None:
+            continue
+        if str(cell_val).strip() == target:
+            return row
+        try:
+            if int(cell_val) == seq:
+                return row
+        except (TypeError, ValueError):
+            pass
+    return -1
+
+
+def sync_container_nozzle_template_dims(
+    product_id: int,
+    viewer: QWidget,
+    folder_override: str = None,
+    show_lock_dialog: bool = True,
+) -> bool:
+    """
+    将条件输入设计数据中的「公称直径*」「容器壳体长度*」写入本地产品文件夹
+    「管口导入模板.xlsx」：序号 26 / 25 对应行的「管口参数值」列。
+    仅容器产品调用。文件占用/写入失败时返回 False（由调用方决定是否阻断保存）。
+    模板文件不存在时视为无需同步，返回 True。
+    """
+    if viewer is not None and not is_container_viewer(viewer):
+        return True
+
+    if folder_override:
+        folder = os.path.normpath(folder_override)
+    else:
+        folder, err = get_expected_product_local_folder(product_id)
+        if not folder:
+            print(f"[管口模板同步] 无法解析产品文件夹: {err}")
+            return False
+
+    nozzle_path = os.path.join(folder, "管口导入模板.xlsx")
+    if not os.path.isfile(nozzle_path):
+        print(f"[管口模板同步] 未找到文件，跳过: {nozzle_path}")
+        return True
+
+    if is_file_locked(nozzle_path):
+        if show_lock_dialog:
+            show_warning_dialog(
+                viewer,
+                "文件占用",
+                f"请先关闭本地文件：\n{nozzle_path}\n然后重试保存。",
+            )
+        return False
+
+    dn_text = _get_container_design_shell_value(viewer, "公称直径*")
+    length_text = _get_container_design_shell_value(viewer, "容器壳体长度*")
+    # 序号 → 写入值：25=容器壳体长度*，26=公称直径*
+    updates = {
+        25: _excel_cell_value_from_text(length_text),
+        26: _excel_cell_value_from_text(dn_text),
+    }
+
+    try:
+        wb = load_workbook(nozzle_path)
+    except Exception as e:
+        print(f"[管口模板同步] 打开失败: {e}")
+        show_warning_dialog(
+            viewer,
+            "同步失败",
+            f"无法打开管口导入模板：\n{nozzle_path}\n\n{e}",
+        )
+        return False
+
+    sheet = wb.active
+    value_col = _find_nozzle_param_value_col(sheet)
+    written = []
+    for seq, value in updates.items():
+        excel_row = _find_sheet_row_by_seq(sheet, seq)
+        if excel_row < 0:
+            print(f"[管口模板同步] 未找到序号 {seq} 的行，跳过")
+            continue
+        cell = sheet.cell(row=excel_row, column=value_col)
+        if isinstance(cell, MergedCell):
+            print(f"[管口模板同步] 序号 {seq} 对应单元格为合并单元格，跳过")
+            continue
+        cell.value = value
+        written.append(seq)
+
+    if not written:
+        print("[管口模板同步] 未写入任何单元格")
+        show_warning_dialog(
+            viewer,
+            "同步失败",
+            f"管口导入模板中未找到序号 25/26 对应行，无法同步：\n{nozzle_path}",
+        )
+        return False
+
+    try:
+        wb.save(nozzle_path)
+    except Exception as e:
+        print(f"[管口模板同步] 保存失败: {e}")
+        show_warning_dialog(
+            viewer,
+            "同步失败",
+            f"写入管口导入模板失败：\n{nozzle_path}\n\n{e}",
+        )
+        return False
+
+    print(
+        f"[管口模板同步] 已更新序号 {written} → 管口参数值列(col={value_col}): "
+        f"壳体长度={length_text!r}, 公称直径={dn_text!r} → {nozzle_path}"
+    )
     return True
 
 
