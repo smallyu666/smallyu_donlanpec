@@ -12,12 +12,17 @@ from modules.cailiaodingyi.funcs.funcs_pdf_input import query_all_guankou_catego
 # from modules.cailiaodingyi.funcs.funcs_pdf_change import update_element_name_data, \
 #     get_design_params_by_product_id, update_guankou_param_flex_db, query_guankou_affiliation, resolve_gasket_dimensions
 from modules.condition_input.funcs.db_cnt import get_connection
+from modules.chanpinguanli.project_confirm_btn import (
+    apply_msgbox_button_style,
+    show_warning_dialog,
+    show_critical_dialog,
+)
 from typing import Dict, Tuple
 import pymysql
 from PyQt5.QtWidgets import (QTableWidgetItem, QTableWidget, QHeaderView, QWidget, QAbstractButton,
                              QMessageBox, QUndoStack, QFileDialog, QComboBox, QStyledItemDelegate, QShortcut,
                              QTabWidget, QStackedWidget, QLabel, QStyleOptionViewItem, QStyle, QAbstractItemDelegate,
-                             QLineEdit)
+                             QLineEdit, QHBoxLayout, QSizePolicy)
 from PyQt5.QtCore import Qt, QTimer, QObject, QEvent
 from PyQt5.QtGui import QColor, QStandardItemModel, QStandardItem, QBrush, QKeySequence, QPixmap
 import re
@@ -114,7 +119,7 @@ def _warn_once(viewer: QWidget, message: str, key: str, window_ms: int = 1500):
         if now - last < window_ms:
             return
         store[key] = now
-        QMessageBox.warning(viewer, "提示", message)
+        show_warning_dialog(viewer, "提示", message)
     except Exception:
         pass
 
@@ -1785,6 +1790,31 @@ def set_multilevel_headers(table_widget: QTableWidget, top_headers: list, sub_he
     table_widget.trail_header_rows = 2
 
 
+def _format_coating_usage_display(usage: str) -> str:
+    """
+    涂漆「用途」显示：从括号起换行。
+    例：内涂漆（管程）→ 内涂漆\\n（管程）；无括号则原样。
+    """
+    s = (usage or "").strip()
+    if not s:
+        return s
+    for paren in ("（", "("):
+        i = s.find(paren)
+        if i > 0:
+            return s[:i].rstrip() + "\n" + s[i:]
+    return s
+
+
+def _coating_usage_original_from_item(item) -> str:
+    """读取用途原始值（优先 UserRole，避免把显示用换行写回库）。"""
+    if item is None:
+        return ""
+    orig = item.data(Qt.UserRole)
+    if orig is not None and str(orig).strip() != "":
+        return str(orig).replace("\n", "").strip()
+    return (item.text() or "").replace("\n", "").strip()
+
+
 def render_coating_table(table_widget: QTableWidget, grouped_data: dict, exec_std_value: str = ""):
     headers = ["用途", "细类", "油漆类别", "颜色", "干膜厚度（μm）", "涂漆面积", "备注"]
     total_data_rows = sum(len(rows) for rows in grouped_data.values())
@@ -1796,6 +1826,8 @@ def render_coating_table(table_widget: QTableWidget, grouped_data: dict, exec_st
 
     table_widget.verticalHeader().setVisible(False)
     table_widget.horizontalHeader().setVisible(False)
+    # 用途列含括号换行，需允许自动换行
+    table_widget.setWordWrap(True)
 
     # ✅ 第一行：执行标准/规范
     table_widget.setSpan(0, 0, 1, 2)
@@ -1816,10 +1848,11 @@ def render_coating_table(table_widget: QTableWidget, grouped_data: dict, exec_st
     for group_key, row_list in grouped_data.items():
         span_start = current_row
         merge_data = {"涂漆面积": "", "备注": ""}
+        usage_display = _format_coating_usage_display(group_key)
 
         for idx, row in enumerate(row_list):
             values = [
-                group_key,
+                usage_display,
                 row.get("_细类", ""),
                 row.get("油漆类别", ""),
                 row.get("颜色", ""),
@@ -1831,6 +1864,9 @@ def render_coating_table(table_widget: QTableWidget, grouped_data: dict, exec_st
                 val = "" if val is None else str(val)
                 item = QTableWidgetItem(val)
                 item.setTextAlignment(Qt.AlignCenter)
+                if col == 0:
+                    item.setData(Qt.UserRole, group_key)
+                    item.setToolTip(str(group_key))
 
                 # ✅ 设置可编辑性（只用途/细类列是只读）
                 if col in (0, 1):
@@ -1848,10 +1884,12 @@ def render_coating_table(table_widget: QTableWidget, grouped_data: dict, exec_st
 
         row_count = len(row_list)
 
-        # ✅ 合并用途列
-        item = QTableWidgetItem(group_key)
+        # ✅ 合并用途列（显示换行，UserRole 存原始用途）
+        item = QTableWidgetItem(usage_display)
         item.setTextAlignment(Qt.AlignCenter)
         item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+        item.setData(Qt.UserRole, group_key)
+        item.setToolTip(str(group_key))
         table_widget.setSpan(span_start, 0, row_count, 1)
         table_widget.setItem(span_start, 0, item)
 
@@ -1978,7 +2016,9 @@ _TABLE_BODY_ITEM_STYLE = "QTableWidget::item { font-weight: normal; }"
 
 # 0522新修改-ui修改
 def apply_table_style(table_widget, keep_vertical_header=False):
-    table_widget.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+    # 已启用屏幕比例列宽的表不再设 Stretch，避免冲掉固定比例
+    if not getattr(table_widget, "_prop_layout_ready", False):
+        table_widget.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
     table_widget.setAlternatingRowColors(True)
     table_widget.setSelectionBehavior(table_widget.SelectItems)
 
@@ -2114,6 +2154,288 @@ def shrink_unit_column(table_widget, width: int = 300):
     header = table_widget.horizontalHeader()
     header.setSectionResizeMode(2, QHeaderView.Fixed)
     table_widget.setColumnWidth(2, width)
+
+
+# ---------------------------------------------------------------------------
+# 条件输入各表列宽（甲方确认）：
+# - 表宽 = 当前屏幕分辨率宽度 × 70%，居中
+# - 不随软件窗口拖拽放大缩小；换到不同分辨率显示器时再按新屏幕 70% 重算
+# - 列与列之间按固定百分比分配
+# ---------------------------------------------------------------------------
+CONDITION_TABLE_WIDTH_RATIO = 0.70
+# 兼容旧常量名
+DESIGN_DATA_TABLE_WIDTH_RATIO = CONDITION_TABLE_WIDTH_RATIO
+DESIGN_DATA_COL_RATIOS_HX = (0.10, 0.30, 0.12, 0.24, 0.24)
+DESIGN_DATA_COL_RATIOS_CONTAINER = (0.10, 0.30, 0.15, 0.45)
+PRODUCT_STD_COL_RATIOS = (0.10, 0.30, 0.60)
+GENERAL_DATA_COL_RATIOS = (0.10, 0.30, 0.15, 0.45)
+TRAIL_DATA_COL_RATIOS_5 = (0.20, 0.20, 0.20, 0.20, 0.20)
+TRAIL_DATA_COL_RATIOS_8 = (0.20, 0.20, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10)
+# 用途 / 细类 / 油漆类别 / 颜色 / 干膜厚度 / 涂漆面积 / 备注
+COATING_DATA_COL_RATIOS = (0.10, 0.10, 0.20, 0.15, 0.15, 0.15, 0.15)
+
+# table objectName -> 所在 Tab objectName
+_CONDITION_TABLE_TAB_MAP = {
+    "tableWidget_product_std": "tab_product_std",
+    "tableWidget_design_data": "tab_design_data",
+    "tableWidget_general_data": "tab_general_data",
+    "tableWidget_trail_data": "tab_trail_data",
+    "tableWidget_coating_data": "tab_coating_data",
+}
+
+
+def _condition_table_is_container(viewer) -> bool:
+    product_type = getattr(viewer, "product_type", "") or ""
+    return "容器" in product_type
+
+
+def _design_data_is_container(viewer) -> bool:
+    return _condition_table_is_container(viewer)
+
+
+def _condition_table_col_ratios(viewer, table_name: str):
+    """按表名/产品类型返回可见列比例元组。"""
+    is_container = _condition_table_is_container(viewer)
+    if table_name == "tableWidget_product_std":
+        return PRODUCT_STD_COL_RATIOS
+    if table_name == "tableWidget_design_data":
+        return DESIGN_DATA_COL_RATIOS_CONTAINER if is_container else DESIGN_DATA_COL_RATIOS_HX
+    if table_name == "tableWidget_general_data":
+        return GENERAL_DATA_COL_RATIOS
+    if table_name == "tableWidget_trail_data":
+        return TRAIL_DATA_COL_RATIOS_5 if is_container else TRAIL_DATA_COL_RATIOS_8
+    if table_name == "tableWidget_coating_data":
+        return COATING_DATA_COL_RATIOS
+    return None
+
+
+def setup_condition_table_proportional_layout(viewer, table_name: str) -> None:
+    """将指定表改为：外层横向居中 + 固定屏幕比例宽度。仅初始化一次。"""
+    table = getattr(viewer, table_name, None)
+    tab_name = _CONDITION_TABLE_TAB_MAP.get(table_name)
+    tab = getattr(viewer, tab_name, None) if tab_name else None
+    if table is None or tab is None:
+        return
+    if getattr(table, "_prop_layout_ready", False):
+        return
+
+    v_layout = tab.layout()
+    if v_layout is None:
+        return
+
+    v_layout.removeWidget(table)
+    host = QWidget(tab)
+    host.setObjectName(f"{table_name}_prop_host")
+    h_layout = QHBoxLayout(host)
+    h_layout.setContentsMargins(0, 0, 0, 0)
+    h_layout.setSpacing(0)
+    h_layout.addStretch(1)
+    h_layout.addWidget(table)
+    h_layout.addStretch(1)
+    v_layout.addWidget(host)
+
+    table.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+    # 涂漆表用途列需括号换行；其它表单行省略
+    if table_name == "tableWidget_coating_data":
+        table.setWordWrap(True)
+        table.setTextElideMode(Qt.ElideNone)
+    else:
+        table.setWordWrap(False)
+        table.setTextElideMode(Qt.ElideRight)
+    table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+    table._prop_layout_ready = True
+    table._prop_layout_host = host
+    table._prop_table_name = table_name
+
+
+def apply_condition_table_cell_tooltips(table_widget) -> None:
+    """为表格单元格设置悬停全文（配合超长省略号）。"""
+    if table_widget is None:
+        return
+    is_coating = table_widget.objectName() == "tableWidget_coating_data"
+    for row in range(table_widget.rowCount()):
+        for col in range(table_widget.columnCount()):
+            item = table_widget.item(row, col)
+            if item is None:
+                continue
+            # 涂漆用途列：tooltip 用原始单行文案
+            if is_coating and col == 0 and row >= 2:
+                text = _coating_usage_original_from_item(item)
+            else:
+                text = item.text()
+            item.setToolTip(text if text else "")
+            widget = table_widget.cellWidget(row, col)
+            if widget is not None and hasattr(widget, "setToolTip"):
+                widget.setToolTip(text if text else "")
+
+
+def _condition_table_available_content_width(table) -> int:
+    """
+    可供列宽分配的内容区宽度。
+    必须扣除边框与纵向滚动条，否则行多（如通用数据）出现竖条后，
+    列总宽会大于 viewport，从而多出横向滚动条。
+    """
+    from PyQt5.QtWidgets import QStyle
+
+    fw = table.frameWidth()
+    total_w = max(table.width() - 2 * fw, 50)
+
+    hh = table.horizontalHeader().height() if table.horizontalHeader() else 0
+    view_h = table.height() - 2 * fw - hh
+    if view_h <= 0:
+        view_h = max(table.viewport().height(), 1)
+    content_h = 0
+    if table.rowCount() > 0:
+        content_h = sum(table.rowHeight(r) for r in range(table.rowCount()))
+    need_vscroll = content_h > view_h
+
+    sb = table.verticalScrollBar()
+    sb_w = 0
+    if sb is not None and (sb.isVisible() or need_vscroll):
+        sb_w = max(sb.width(), sb.sizeHint().width())
+        if sb_w <= 0:
+            sb_w = table.style().pixelMetric(QStyle.PM_ScrollBarExtent, None, table)
+
+    return max(50, total_w - sb_w)
+
+
+def apply_condition_table_column_proportions(viewer, table_name: str) -> None:
+    """按约定比例给指定表可见列分配宽度（非 Stretch）。"""
+    table = getattr(viewer, table_name, None)
+    if table is None or table.columnCount() <= 0:
+        return
+
+    ratios = _condition_table_col_ratios(viewer, table_name)
+    if not ratios:
+        return
+
+    visible_cols = [c for c in range(table.columnCount()) if not table.isColumnHidden(c)]
+    if not visible_cols:
+        return
+
+    if len(visible_cols) != len(ratios):
+        ratios = tuple(1.0 / len(visible_cols) for _ in visible_cols)
+
+    header = table.horizontalHeader()
+    header.setSectionResizeMode(QHeaderView.Fixed)
+    header.setStretchLastSection(False)
+
+    table_w = _condition_table_available_content_width(table)
+
+    assigned = 0
+    for i, col in enumerate(visible_cols):
+        if i == len(visible_cols) - 1:
+            w = max(30, table_w - assigned)
+        else:
+            w = max(30, int(round(table_w * ratios[i])))
+            assigned += w
+        table.setColumnWidth(col, w)
+
+    # 列宽已按内容区算满，不应再出现横向滚动条（超长靠省略号+悬停）
+    table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+
+def _condition_table_screen_width(viewer) -> int:
+    """取 viewer 所在屏幕的宽度（多显示器时按窗口中心所在屏）。"""
+    try:
+        from PyQt5.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is None:
+            return 1920
+        try:
+            from PyQt5.QtGui import QGuiApplication, QCursor
+            center = viewer.frameGeometry().center() if viewer is not None else QCursor.pos()
+            screen = QGuiApplication.screenAt(center)
+            if screen is not None:
+                return int(screen.geometry().width())
+        except Exception:
+            pass
+        desk = app.desktop()
+        if desk is not None:
+            if viewer is not None:
+                try:
+                    return int(desk.screenGeometry(viewer).width())
+                except Exception:
+                    pass
+            return int(desk.screenGeometry().width())
+    except Exception:
+        pass
+    return 1920
+
+
+def refresh_condition_table_proportional_layout(viewer, table_name: str, force: bool = False) -> None:
+    """
+    刷新单表：宽度 = 屏幕宽 × 70%，居中；仅屏幕宽度变化或 force 时重算表宽；
+    列按固定比例分配，并刷新 tooltip。
+    """
+    table = getattr(viewer, table_name, None)
+    if table is None:
+        return
+    if not getattr(table, "_prop_layout_ready", False):
+        setup_condition_table_proportional_layout(viewer, table_name)
+        if not getattr(table, "_prop_layout_ready", False):
+            return
+
+    screen_w = _condition_table_screen_width(viewer)
+    last_screen_w = getattr(viewer, "_condition_tables_last_screen_w", None)
+    need_resize = force or last_screen_w != screen_w
+
+    if need_resize:
+        target_w = max(320, int(screen_w * CONDITION_TABLE_WIDTH_RATIO))
+        table.setFixedWidth(target_w)
+        # 多表共用同一屏幕宽缓存；由 refresh_all 统一写回亦可
+        viewer._condition_tables_last_screen_w = screen_w
+
+    header = table.horizontalHeader()
+    header.setSectionResizeMode(QHeaderView.Fixed)
+    header.setStretchLastSection(False)
+    apply_condition_table_column_proportions(viewer, table_name)
+    apply_condition_table_cell_tooltips(table)
+
+
+def refresh_all_condition_tables_proportional_layout(viewer, force: bool = False) -> None:
+    """刷新条件输入全部已配置比例布局的表。"""
+    screen_w = _condition_table_screen_width(viewer)
+    last_screen_w = getattr(viewer, "_condition_tables_last_screen_w", None)
+    if force or last_screen_w != screen_w:
+        force = True
+
+    for table_name in _CONDITION_TABLE_TAB_MAP:
+        if getattr(viewer, table_name, None) is None:
+            continue
+        try:
+            refresh_condition_table_proportional_layout(viewer, table_name, force=force)
+        except Exception as e:
+            print(f"[条件输入列宽] 刷新 {table_name} 失败: {e}")
+
+    viewer._condition_tables_last_screen_w = screen_w
+
+
+def setup_all_condition_tables_proportional_layout(viewer) -> None:
+    for table_name in _CONDITION_TABLE_TAB_MAP:
+        if getattr(viewer, table_name, None) is None:
+            continue
+        try:
+            setup_condition_table_proportional_layout(viewer, table_name)
+        except Exception as e:
+            print(f"[条件输入列宽] 初始化 {table_name} 失败: {e}")
+
+
+# --- 兼容旧接口（设计数据试点时期调用名）---
+def setup_design_data_proportional_layout(viewer) -> None:
+    setup_condition_table_proportional_layout(viewer, "tableWidget_design_data")
+
+
+def apply_design_data_cell_tooltips(table_widget) -> None:
+    apply_condition_table_cell_tooltips(table_widget)
+
+
+def apply_design_data_column_proportions(viewer) -> None:
+    apply_condition_table_column_proportions(viewer, "tableWidget_design_data")
+
+
+def refresh_design_data_proportional_layout(viewer, force: bool = False) -> None:
+    refresh_condition_table_proportional_layout(viewer, "tableWidget_design_data", force=force)
 
 
 """存入数据库相关函数"""
@@ -2424,9 +2746,9 @@ def save_coating_table_to_database(table_widget: QTableWidget, table_name, produ
             current_row = 2
 
             while current_row < row_count:
-                # ✅ 当前组用途
+                # ✅ 当前组用途（显示可能含换行，读原始值）
                 usage_item = table_widget.item(current_row, 0)
-                current_usage = usage_item.text().strip() if usage_item else ""
+                current_usage = _coating_usage_original_from_item(usage_item)
 
                 # ✅ 合并列提取：面积、备注
                 paint_area_item = table_widget.item(current_row, 5)
@@ -2437,7 +2759,7 @@ def save_coating_table_to_database(table_widget: QTableWidget, table_name, produ
                 sub_row = current_row
                 while sub_row < row_count:
                     usage_item_sub = table_widget.item(sub_row, 0)
-                    sub_usage = usage_item_sub.text().strip() if usage_item_sub else ""
+                    sub_usage = _coating_usage_original_from_item(usage_item_sub)
                     if sub_row != current_row and sub_usage != current_usage:
                         break  # 下一组开始
 
@@ -3157,7 +3479,7 @@ def save_all_tables(viewer, product_id):
     """
     try:
         if not product_id:
-            QMessageBox.warning(viewer, "产品ID无效", "产品ID不能为空")
+            show_warning_dialog(viewer, "产品ID无效", "产品ID不能为空")
             return
 
         is_from_design_lib = viewer.design_data_source == "设计活动库"
@@ -3236,7 +3558,7 @@ def save_all_tables(viewer, product_id):
         except Exception as e:
             print(f"[警告] 条件输入保存后的PN刷新失败: {e}")
     except Exception as e:
-        QMessageBox.critical(viewer, "保存失败", f"保存数据时发生错误：{str(e)}")
+        show_critical_dialog(viewer, "保存失败", f"保存数据时发生错误：{str(e)}")
 
 
 """保存前检查必填项"""
@@ -3669,6 +3991,7 @@ def _dn_ask_continue_or_clear(viewer, table, row, col, warning_msg: str) -> bool
     box.setText(warning_msg)
     box.addButton("是", QMessageBox.YesRole)
     btn_no = box.addButton("否", QMessageBox.NoRole)
+    apply_msgbox_button_style(box)
     box.setDefaultButton(btn_no)
     box.exec_()
     if box.clickedButton() == btn_no:
@@ -5089,7 +5412,7 @@ def _notify_local_condition_xlsx_missing(viewer: QWidget, detail: str) -> None:
     first = (detail or "").strip()
     second = "如需恢复该文件，请前往「项目管理」，选中当前产品后按提示恢复本地产品文件夹。"
     msg = f"{first}\n\n{second}" if first else second
-    QMessageBox.warning(parent, "保存失败", msg)
+    show_warning_dialog(parent, "保存失败", msg)
 
 
 def save_local_condition_file(product_id: int, viewer: QWidget, local_path_override: str = None) -> bool:
@@ -5113,7 +5436,7 @@ def save_local_condition_file(product_id: int, viewer: QWidget, local_path_overr
 
     print(f"{local_path}")
     if is_file_locked(local_path):
-        QMessageBox.warning(viewer, "文件占用", f"请先关闭本地文件：\n{local_path}\n然后重试保存。")
+        show_warning_dialog(viewer, "文件占用", f"请先关闭本地文件：\n{local_path}\n然后重试保存。")
         return False  # 阻止继续
     try:
         wb = load_workbook(local_path)
@@ -6291,6 +6614,8 @@ class TrailTableComboDelegate(QStyledItemDelegate):
         combo.setEditable(False)
         combo.installEventFilter(self)
         QTimer.singleShot(0, lambda e=combo: e.installEventFilter(self))
+        # 单击进入编辑后立即弹出下拉菜单（与设计/通用数据一致）
+        QTimer.singleShot(0, combo.showPopup)
 
         # ✅ 添加 Delete / Backspace 快捷键
         for key in (Qt.Key_Delete, Qt.Key_Backspace):

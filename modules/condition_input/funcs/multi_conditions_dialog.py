@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
     QHeaderView,
 )
 from modules.condition_input.funcs.ctrl_helper import enable_full_undo
+from modules.chanpinguanli.project_confirm_btn import show_info_dialog, show_critical_dialog
 # 0522新修改
 from modules.condition_input.funcs.funcs_cdt_input import (
     apply_table_style,
@@ -582,7 +583,7 @@ class MultiConditionsDialog(QDialog):
         self._save_to_cache(gongkuang_no)
         if gongkuang_no == 1:
             self._apply_gongkuang1_to_main_table()
-            QMessageBox.information(self, "保存成功", f"工况{gongkuang_no} 已保存")
+            show_info_dialog(self, "保存成功", f"工况{gongkuang_no} 已保存")
             return
 
         # ✅ 工况2/3 及以后：写数据库
@@ -638,7 +639,7 @@ class MultiConditionsDialog(QDialog):
             conn.commit()
             conn.close()
             # ❌ 不再 self.accept()，保持窗口打开
-            QMessageBox.information(self, "保存成功", f"工况{gongkuang_no} 已保存")
+            show_info_dialog(self, "保存成功", f"工况{gongkuang_no} 已保存")
             
             # 0209新修改-多工况输入标识显示
             # ✅ 通知父窗口更新多工况状态并刷新显示
@@ -646,7 +647,7 @@ class MultiConditionsDialog(QDialog):
             if parent and hasattr(parent, "update_multi_conditions_status"):
                 parent.update_multi_conditions_status()
         except Exception as e:
-            QMessageBox.critical(self, "保存失败", f"保存工况{gongkuang_no} 数据失败：{e}")
+            show_critical_dialog(self, "保存失败", f"保存工况{gongkuang_no} 数据失败：{e}")
 
     def _auto_save_current_gongkuang(self, gongkuang_no):
         """静默保存当前工况（无弹窗）"""

@@ -12,6 +12,11 @@ from modules.cailiaodingyi.funcs.funcs_pdf_input import query_all_guankou_catego
 # from modules.cailiaodingyi.funcs.funcs_pdf_change import update_element_name_data, \
 #     get_design_params_by_product_id, update_guankou_param_flex_db, query_guankou_affiliation, resolve_gasket_dimensions
 from modules.condition_input.funcs.db_cnt import get_connection
+from modules.chanpinguanli.project_confirm_btn import (
+    apply_msgbox_button_style,
+    show_warning_dialog,
+    show_critical_dialog,
+)
 from typing import Dict, Tuple
 import pymysql
 from PyQt5.QtWidgets import (QTableWidgetItem, QTableWidget, QHeaderView, QWidget, QAbstractButton,
@@ -111,7 +116,7 @@ def _warn_once(viewer: QWidget, message: str, key: str, window_ms: int = 1500):
         if now - last < window_ms:
             return
         store[key] = now
-        QMessageBox.warning(viewer, "提示", message)
+        show_warning_dialog(viewer, "提示", message)
     except Exception:
         pass
 
@@ -2653,7 +2658,7 @@ def save_all_tables(viewer, product_id):
     """
     try:
         if not product_id:
-            QMessageBox.warning(viewer, "产品ID无效", "产品ID不能为空")
+            show_warning_dialog(viewer, "产品ID无效", "产品ID不能为空")
             return
 
         is_from_design_lib = viewer.design_data_source == "设计活动库"
@@ -2730,7 +2735,7 @@ def save_all_tables(viewer, product_id):
         except Exception as e:
             print(f"[警告] 条件输入保存后的PN刷新失败: {e}")
     except Exception as e:
-        QMessageBox.critical(viewer, "保存失败", f"保存数据时发生错误：{str(e)}")
+        show_critical_dialog(viewer, "保存失败", f"保存数据时发生错误：{str(e)}")
 
 
 """保存前检查必填项"""
@@ -3132,6 +3137,7 @@ def _dn_ask_continue_or_clear(viewer, table, row, col, warning_msg: str) -> bool
     box.setText(warning_msg)
     box.addButton("是", QMessageBox.YesRole)
     btn_no = box.addButton("否", QMessageBox.NoRole)
+    apply_msgbox_button_style(box)
     box.setDefaultButton(btn_no)
     box.exec_()
     if box.clickedButton() == btn_no:
@@ -4466,7 +4472,7 @@ def _notify_local_condition_xlsx_missing(viewer: QWidget, detail: str) -> None:
     first = (detail or "").strip()
     second = "如需恢复该文件，请前往「项目管理」，选中当前产品后按提示恢复本地产品文件夹。"
     msg = f"{first}\n\n{second}" if first else second
-    QMessageBox.warning(parent, "保存失败", msg)
+    show_warning_dialog(parent, "保存失败", msg)
 
 
 def save_local_condition_file(product_id: int, viewer: QWidget, local_path_override: str = None) -> bool:
@@ -4490,7 +4496,7 @@ def save_local_condition_file(product_id: int, viewer: QWidget, local_path_overr
 
     print(f"{local_path}")
     if is_file_locked(local_path):
-        QMessageBox.warning(viewer, "文件占用", f"请先关闭本地文件：\n{local_path}\n然后重试保存。")
+        show_warning_dialog(viewer, "文件占用", f"请先关闭本地文件：\n{local_path}\n然后重试保存。")
         return False  # 阻止继续
     try:
         wb = load_workbook(local_path)
