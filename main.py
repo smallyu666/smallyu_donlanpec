@@ -795,7 +795,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.action_18:
             self.action_18.triggered.connect(self.yudingyi)  # 新增
 
-        # ✅ 字体大小（方案2）：放在“配置 -> 偏好设置”下，风格延续原菜单结构
+        # 0719菜单栏改动
+        # ✅ 字体大小：挂在菜单栏「偏好设置」下；顶栏配置仅保留预定义
         try:
             self._init_font_size_menu()
         except Exception as e:
@@ -887,58 +888,32 @@ class MainWindow(QtWidgets.QMainWindow):
         if dialog.exec_():
             self.process_output_selection(dialog)
 
+    # 0719菜单栏改动
     def _init_font_size_menu(self):
-        # 0226新修改-字体大小：配置菜单中的字体大小三档（大/默认/小）
+        # 偏好设置/帮助在菜单栏；顶栏「配置」只保留「预定义」
         global APP_FONT_SCALE_CTRL
         ctrl = APP_FONT_SCALE_CTRL
         if ctrl is None:
             return
 
-        # 偏好设置 submenu（objectName 在 ui 里叫 "menu"）
+        # 顶栏配置按钮：仅挂「预定义」
+        btn_config = self.findChild(QtWidgets.QToolButton, "btn_config")
+        if btn_config:
+            config_menu = btn_config.menu()
+            if config_menu is None:
+                config_menu = QtWidgets.QMenu(self)
+                btn_config.setMenu(config_menu)
+                btn_config.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+                config_menu.setStyleSheet("QMenu::right-arrow { image: url(icons/arrow_down.png); }")
+            act_18 = self.findChild(QtWidgets.QAction, "action_18")
+            if act_18 and act_18 not in config_menu.actions():
+                config_menu.addAction(act_18)
+
+        # 偏好设置（objectName 在 ui 里为 "menu"），用于挂「字体大小」
         prefs_menu = self.findChild(QtWidgets.QMenu, "menu")
         if prefs_menu is None:
-            # 如果没有找到 "menu"（在新 UI 中），尝试寻找 btn_config 按钮并把菜单挂在它下面
-            btn_config = self.findChild(QtWidgets.QToolButton, "btn_config")
-            if btn_config:
-                config_menu = btn_config.menu()
-                if config_menu is None:
-                    config_menu = QtWidgets.QMenu(self)
-                    btn_config.setMenu(config_menu)
-                    # 点击按钮时立刻弹出下拉菜单
-                    btn_config.setPopupMode(QtWidgets.QToolButton.InstantPopup)
-                    
-                    # 0524新修改-菜单的小箭头为向下箭头
-                    config_menu.setStyleSheet("QMenu::right-arrow { image: url(icons/arrow_down.png); }")
-
-                # 把“预定义”加到配置菜单
-                act_18 = self.findChild(QtWidgets.QAction, "action_18")
-                if act_18:
-                    config_menu.addAction(act_18)
-
-                # 创建子菜单“偏好设置”
-                prefs_menu = config_menu.addMenu("偏好设置")
-                prefs_menu.setObjectName("menu")
-
-                # 把原来在偏好设置里的 action 加进去：界面、快捷键、存储路径
-                for act_name in ["action_15", "action_16", "action_17"]:
-                    act = self.findChild(QtWidgets.QAction, act_name)
-                    if act:
-                        prefs_menu.addAction(act)
-                prefs_menu.addSeparator()
-
-                # 0524新修改：创建子菜单“帮助”
-                help_menu = config_menu.addMenu("帮助")
-                # 放入指定的三个 action
-                for act_name in ["action_help_doc", "action_13", "action_12"]:
-                    act = self.findChild(QtWidgets.QAction, act_name)
-                    if act:
-                        # 恢复原有的文本（之前被改成了“帮助”）
-                        if act_name == "action_help_doc":
-                            act.setText("查看软件使用文档")
-                        help_menu.addAction(act)
-            else:
-                # 兜底：直接挂到菜单栏
-                prefs_menu = self.menuBar().addMenu("偏好设置")
+            prefs_menu = self.menuBar().addMenu("偏好设置")
+            prefs_menu.setObjectName("menu")
 
         font_menu = prefs_menu.addMenu("字体大小")
 

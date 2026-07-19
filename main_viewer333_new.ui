@@ -720,11 +720,11 @@ border: 1px solid #dddddd;</string>
      <x>0</x>
      <y>0</y>
      <width>1598</width>
-     <height>33</height>
+     <height>29</height>
     </rect>
    </property>
    <property name="styleSheet">
-    <string notr="true">font: 12pt &quot;Microsoft YaHei&quot;;</string>
+    <string notr="true">font: 10pt &quot;Microsoft YaHei&quot;;</string>
    </property>
    <widget class="QMenu" name="document">
     <property name="enabled">
@@ -809,6 +809,22 @@ border: 1px solid #dddddd;</string>
      <string>工具</string>
     </property>
    </widget>
+   <widget class="QMenu" name="menu">
+    <property name="title">
+     <string>偏好设置</string>
+    </property>
+    <addaction name="action_15"/>
+    <addaction name="action_16"/>
+    <addaction name="action_17"/>
+   </widget>
+   <widget class="QMenu" name="help">
+    <property name="title">
+     <string>帮助</string>
+    </property>
+    <addaction name="action_help_doc"/>
+    <addaction name="action_13"/>
+    <addaction name="action_12"/>
+   </widget>
    <addaction name="logo"/>
    <addaction name="action"/>
    <addaction name="action_2"/>
@@ -822,6 +838,8 @@ border: 1px solid #dddddd;</string>
    <addaction name="menu_3"/>
    <addaction name="menu_AI"/>
    <addaction name="menu_tools"/>
+   <addaction name="menu"/>
+   <addaction name="help"/>
   </widget>
   <action name="actionyonghuxinxi">
    <property name="text">
