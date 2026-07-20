@@ -1252,11 +1252,13 @@ def restore_default_order(table_widget):
     table_widget.viewport().update()
 
 
-def apply_mode_param_order(table_widget, target_id_seq):
+def apply_mode_param_order(table_widget, target_id_seq, prioritize_starred=False):
     # 1226新修改_工作模式不同产品参数显示顺序调整
     """
     按照 target_id_seq 对表格进行"界面行顺序"的重排（不改单元格内容）。
-    特殊处理：工作模式下，所有带*的必填项参数必须优先显示在不带*的参数之前。
+    prioritize_starred=True（仅简洁输入）：所有带*的必填项优先显示在不带*的参数之前，
+    用于兼容老产品参数ID与模板不一致（如缺14/15导致耐压试验类型*仍为旧ID）的情况。
+    完整输入等其它模式应传 False，严格按模板顺序，不强行把带*提到最前。
     仅处理第0列可解析为 int 的行；其余行保持在末尾原顺序。
     """
     if table_widget.rowCount() == 0 or table_widget.columnCount() == 0:
@@ -1303,28 +1305,45 @@ def apply_mode_param_order(table_widget, target_id_seq):
 
     new_rows = []
 
-    # ✅ 第一步：严格按照 target_id_seq 的顺序，收集所有表格中实际存在的参数（不论是否必填）
-    for pid in target_id_seq:
-        if pid in id2rows:
+    if prioritize_starred:
+        # 简洁输入：先必填(带*)，再非必填；模板内按模板序，模板外必填紧跟其后
+        for pid in target_id_seq:
+            if pid in id2rows and id_to_required.get(pid, False):
+                new_rows.append(id2rows[pid])
+                id2rows.pop(pid)
+
+        remaining_required_ids = [pid for pid in cur_ids if
+                                  pid is not None and pid in id2rows and id_to_required.get(pid, False)]
+        for pid in remaining_required_ids:
             new_rows.append(id2rows[pid])
-            id2rows.pop(pid)  # 从字典中移除，标记为已处理
+            id2rows.pop(pid)
 
-    # ✅ 第二步：收集剩余的必填项（不在模板顺序中，但在表格中存在的带*参数）
-    # 按原始顺序排列剩余的必填项
-    remaining_required_ids = [pid for pid in cur_ids if
-                              pid is not None and pid in id2rows and id_to_required.get(pid, False)]
-    for pid in remaining_required_ids:
-        new_rows.append(id2rows[pid])
-        id2rows.pop(pid)
+        for pid in target_id_seq:
+            if pid in id2rows and not id_to_required.get(pid, False):
+                new_rows.append(id2rows[pid])
+                id2rows.pop(pid)
+    else:
+        # 完整输入等：严格按模板顺序，不论是否必填
+        for pid in target_id_seq:
+            if pid in id2rows:
+                new_rows.append(id2rows[pid])
+                id2rows.pop(pid)
 
-    # ✅ 第三步和第四步合并：收集所有剩余的非必填项，按ID从小到大排序
+        # 模板未列出的带*项仍补到已排内容之后、非必填剩余之前
+        remaining_required_ids = [pid for pid in cur_ids if
+                                  pid is not None and pid in id2rows and id_to_required.get(pid, False)]
+        for pid in remaining_required_ids:
+            new_rows.append(id2rows[pid])
+            id2rows.pop(pid)
+
+    # 模板中未列出的非必填项，按ID从小到大排序
     remaining_non_required_ids = [pid for pid in id2rows.keys() if not id_to_required.get(pid, False)]
-    remaining_non_required_ids.sort()  # 按ID从小到大排序
+    remaining_non_required_ids.sort()
     for pid in remaining_non_required_ids:
         new_rows.append(id2rows[pid])
         id2rows.pop(pid)
 
-    # ✅ 第五步：处理其他特殊情况（理论上此时id2rows应该为空，但保留此逻辑以防万一）
+    # 处理其他特殊情况（理论上此时id2rows应该为空）
     remaining_ids = [pid for pid in cur_ids if pid is not None and pid in id2rows]
     for pid in remaining_ids:
         new_rows.append(id2rows[pid])
@@ -5608,20 +5627,27 @@ def _find_nozzle_param_value_col(sheet) -> int:
     return 6
 
 
-def _find_sheet_row_by_seq(sheet, seq: int) -> int:
-    """按 A 列「序号」查找 Excel 行号（1-based）；未找到返回 -1。"""
-    target = str(seq)
+def _find_nozzle_header_col(sheet, header_keyword: str, default_col: int = None) -> int:
+    """在表头行查找包含 header_keyword 的列（1-based）；找不到则返回 default_col 或 -1。"""
+    for row in range(1, min(sheet.max_row, 5) + 1):
+        for col in range(1, min(sheet.max_column, 20) + 1):
+            val = sheet.cell(row=row, column=col).value
+            if val is not None and header_keyword in str(val).strip():
+                return col
+    return default_col if default_col is not None else -1
+
+
+def _find_sheet_row_by_info_content(sheet, info_col: int, target_text: str) -> int:
+    """按「信息内容」列查找 Excel 行号（1-based）；未找到返回 -1。"""
+    if info_col < 1:
+        return -1
+    target = (target_text or "").strip()
     for row in range(1, sheet.max_row + 1):
-        cell_val = sheet.cell(row=row, column=1).value
+        cell_val = sheet.cell(row=row, column=info_col).value
         if cell_val is None:
             continue
         if str(cell_val).strip() == target:
             return row
-        try:
-            if int(cell_val) == seq:
-                return row
-        except (TypeError, ValueError):
-            pass
     return -1
 
 
@@ -5633,7 +5659,9 @@ def sync_container_nozzle_template_dims(
 ) -> bool:
     """
     将条件输入设计数据中的「公称直径*」「容器壳体长度*」写入本地产品文件夹
-    「管口导入模板.xlsx」：序号 26 / 25 对应行的「管口参数值」列。
+    「管口导入模板.xlsx」：按「信息内容」列定位目标行，写入「管口参数值」列。
+      - 附属元件-实际圆筒长度 ← 容器壳体长度*
+      - 附属元件-实际公称直径 ← 公称直径*
     仅容器产品调用。文件占用/写入失败时返回 False（由调用方决定是否阻断保存）。
     模板文件不存在时视为无需同步，返回 True。
     """
@@ -5664,10 +5692,10 @@ def sync_container_nozzle_template_dims(
 
     dn_text = _get_container_design_shell_value(viewer, "公称直径*")
     length_text = _get_container_design_shell_value(viewer, "容器壳体长度*")
-    # 序号 → 写入值：25=容器壳体长度*，26=公称直径*
+    # 信息内容 → 写入值
     updates = {
-        25: _excel_cell_value_from_text(length_text),
-        26: _excel_cell_value_from_text(dn_text),
+        "附属元件-实际圆筒长度": _excel_cell_value_from_text(length_text),
+        "附属元件-实际公称直径": _excel_cell_value_from_text(dn_text),
     }
 
     try:
@@ -5683,25 +5711,35 @@ def sync_container_nozzle_template_dims(
 
     sheet = wb.active
     value_col = _find_nozzle_param_value_col(sheet)
+    info_col = _find_nozzle_header_col(sheet, "信息内容")
+    if info_col < 1:
+        print("[管口模板同步] 未找到「信息内容」列")
+        show_warning_dialog(
+            viewer,
+            "同步失败",
+            f"管口导入模板中未找到「信息内容」列，无法同步：\n{nozzle_path}",
+        )
+        return False
+
     written = []
-    for seq, value in updates.items():
-        excel_row = _find_sheet_row_by_seq(sheet, seq)
+    for info_content, value in updates.items():
+        excel_row = _find_sheet_row_by_info_content(sheet, info_col, info_content)
         if excel_row < 0:
-            print(f"[管口模板同步] 未找到序号 {seq} 的行，跳过")
+            print(f"[管口模板同步] 未找到信息内容「{info_content}」的行，跳过")
             continue
         cell = sheet.cell(row=excel_row, column=value_col)
         if isinstance(cell, MergedCell):
-            print(f"[管口模板同步] 序号 {seq} 对应单元格为合并单元格，跳过")
+            print(f"[管口模板同步] 信息内容「{info_content}」对应单元格为合并单元格，跳过")
             continue
         cell.value = value
-        written.append(seq)
+        written.append(info_content)
 
     if not written:
         print("[管口模板同步] 未写入任何单元格")
         show_warning_dialog(
             viewer,
             "同步失败",
-            f"管口导入模板中未找到序号 25/26 对应行，无法同步：\n{nozzle_path}",
+            f"管口导入模板中未找到「附属元件-实际圆筒长度」/「附属元件-实际公称直径」对应行，无法同步：\n{nozzle_path}",
         )
         return False
 
@@ -5717,7 +5755,7 @@ def sync_container_nozzle_template_dims(
         return False
 
     print(
-        f"[管口模板同步] 已更新序号 {written} → 管口参数值列(col={value_col}): "
+        f"[管口模板同步] 已更新信息内容 {written} → 管口参数值列(col={value_col}): "
         f"壳体长度={length_text!r}, 公称直径={dn_text!r} → {nozzle_path}"
     )
     return True
