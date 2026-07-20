@@ -1847,11 +1847,16 @@ class DesignConditionInputViewer(QWidget):
                 if specific_mode_name in self._mode_orders:
                     mode_lookup_name = specific_mode_name
 
+        # 仅「简洁输入」需要把带*必填项全部提到前面；完整输入等严格按模板顺序
+        prioritize_starred = str(mode_lookup_name).startswith("简洁输入")
+
         # 默认模式（设计模式）也优先使用模板排序，如果没找到对应模板再恢复默认顺序
         if mode_lookup_name == self._default_mode_name or mode_lookup_name.strip() == "":
             target_ids = self._mode_orders.get(mode_lookup_name)
             if target_ids:
-                apply_mode_param_order(self.tableWidget_design_data, target_ids)
+                apply_mode_param_order(
+                    self.tableWidget_design_data, target_ids, prioritize_starred=prioritize_starred
+                )
             else:
                 restore_default_order(self.tableWidget_design_data)
                 
@@ -1872,7 +1877,9 @@ class DesignConditionInputViewer(QWidget):
 
             # 仅重排三张含“参数ID”的表
             # apply_mode_param_order(self.tableWidget_product_std, target_ids)
-            apply_mode_param_order(self.tableWidget_design_data, target_ids)
+            apply_mode_param_order(
+                self.tableWidget_design_data, target_ids, prioritize_starred=prioritize_starred
+            )
             # apply_mode_param_order(self.tableWidget_general_data, target_ids)
 
         # ===== 新增：模式切换后，将设计数据表格的序号列设为不可编辑 =====
