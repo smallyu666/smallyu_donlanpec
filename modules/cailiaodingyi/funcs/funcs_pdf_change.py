@@ -39,6 +39,9 @@ CLADDING_GROOVE_DEPTH_LEGACY_DEFAULT = "2"
 QIUGUANXING_FENGTOU_ELEMENT_NAME = "球冠形封头"
 QIUGUAN_GROOVE_DEPTH_CONFIG_ENABLED_ID = "1.5.5"
 QIUGUAN_GROOVE_DN_THRESHOLD_CONFIG_ID = "1.5.5.1"
+# 管板：换热管与管板连接接头是否进行拉脱试验（配置库 user_config）
+PULL_OUT_TEST_CONFIG_ID = "2.9.11"
+PULL_OUT_TEST_PARAM_NAME = "换热管与管板连接接头是否进行拉脱试验"
 _CLADDING_GROOVE_DEPTH_FROM_CONFIG_CACHE = None
 _QIUGUAN_GROOVE_CONFIG_ENABLED_CACHE = None
 _QIUGUAN_GROOVE_DN_THRESHOLD_CACHE = None
@@ -549,6 +552,9 @@ def insert_or_update_element_para_data(product_id, element_para_info):
                 except:
                     pass
             
+            # 拉脱试验默认值：按配置库 user_config(2.9.11) 一次解析，模板写入产品库时覆盖
+            pull_out_test_default = resolve_pull_out_test_default_from_user_config()
+
             for item in element_para_info:
                 param_name = str(item.get('参数名称', '') or '').strip()
                 param_value = item.get('参数数值', '') or ''
@@ -559,6 +565,10 @@ def insert_or_update_element_para_data(product_id, element_para_info):
                     # 直接使用从联动参数表获取的第一个选项作为默认值（不管以前是什么值）
                     param_value = default_head_type_code
                     print(f"[封头类型代号联动] 切换模板时调整: {param_value_str} -> {param_value} (是否以外径为基准*={is_outer_base})")
+
+                # 管板拉脱试验：true→是，false→否（覆盖材料库模板中的占位值）
+                if param_name == PULL_OUT_TEST_PARAM_NAME:
+                    param_value = pull_out_test_default
                 
                 # 确保所有字段都不为None，并转换为字符串
                 element_para_id = item.get('元件附加参数ID')
@@ -1533,6 +1543,14 @@ def _get_user_config_value(config_id: str):
         return None
 
 
+def resolve_pull_out_test_default_from_user_config() -> str:
+    """
+    管板「换热管与管板连接接头是否进行拉脱试验」默认值。
+    读配置库 user_config(id=2.9.11)：true→「是」，false→「否」。
+    """
+    return "是" if _is_truthy_config_value(_get_user_config_value(PULL_OUT_TEST_CONFIG_ID)) else "否"
+
+
 def _is_truthy_config_value(value) -> bool:
     """将 user_config.value 解析为布尔值。"""
     if isinstance(value, bool):
@@ -1719,8 +1737,152 @@ def cladding_groove_depth_default_if_needed(
     return ""
 
 
-def get_filtered_material_options(selected: dict) -> dict:
-    """根据当前已选字段，查询数据库，返回所有材料字段的可选项"""
+# 元件允许材料类型表缓存：{零件名称: [材料类型, ...]}
+_ALLOWED_MATERIAL_TYPES_CACHE: Optional[Dict[str, List[str]]] = None
+
+
+def invalidate_allowed_material_types_cache():
+    global _ALLOWED_MATERIAL_TYPES_CACHE
+    _ALLOWED_MATERIAL_TYPES_CACHE = None
+
+
+def _load_allowed_material_types_map(force_reload: bool = False) -> Dict[str, List[str]]:
+    """加载 材料库.元件允许材料类型表 → {零件名称: [材料类型...]}。"""
+    global _ALLOWED_MATERIAL_TYPES_CACHE
+    if _ALLOWED_MATERIAL_TYPES_CACHE is not None and not force_reload:
+        return _ALLOWED_MATERIAL_TYPES_CACHE
+    mapping: Dict[str, List[str]] = {}
+    conn = get_connection(**db_config_2)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT `零件名称`, `材料类型` FROM `元件允许材料类型表`")
+            rows = cur.fetchall() or []
+        for row in rows:
+            if isinstance(row, dict):
+                part = (row.get("零件名称") or "").strip()
+                mtype = (row.get("材料类型") or "").strip()
+            else:
+                part = (row[0] or "").strip() if len(row) > 0 else ""
+                mtype = (row[1] or "").strip() if len(row) > 1 else ""
+            if not part or not mtype:
+                continue
+            lst = mapping.setdefault(part, [])
+            if mtype not in lst:
+                lst.append(mtype)
+        # 仅成功查询后写入缓存；失败不缓存，避免启动瞬间连库失败后整进程永久不限制
+        _ALLOWED_MATERIAL_TYPES_CACHE = mapping
+    except Exception as e:
+        print(f"[元件允许材料类型] 加载失败: {e}")
+        return {}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return mapping
+
+
+def _strip_part_name_parenthetical(name: str) -> str:
+    """螺母(拉杆) / 螺栓（接管法兰）→ 螺母 / 螺栓。"""
+    n = (name or "").strip()
+    if not n:
+        return ""
+    m = re.match(r"^(.+?)\s*[（(].+[）)]\s*$", n)
+    return (m.group(1).strip() if m else n)
+
+
+def get_allowed_material_types(element_name) -> Optional[List[str]]:
+    """
+    查《元件允许材料类型表》返回该零件允许的材料类型。
+    - 未配置/查不到：返回 None（不限制，保持材料表全量）
+    - 已配置：返回有序列表
+    element_name 可为 str，或多个名称的 list/tuple/set（多个时取并集，合并元件冲突场景暂用并集）。
+    匹配顺序：标准名精确 → 原名精确 → 去括号名 → 最长后缀匹配（如 管箱平盖→平盖）。
+    """
+    names: List[str] = []
+    if isinstance(element_name, (list, tuple, set)):
+        names = [str(x).strip() for x in element_name if str(x).strip()]
+    else:
+        n = (element_name or "").strip()
+        if n:
+            names = [n]
+    if not names:
+        return None
+
+    mapping = _load_allowed_material_types_map()
+    if not mapping:
+        return None
+
+    allowed: List[str] = []
+    seen = set()
+    any_hit = False
+
+    def _add_types(types: List[str]):
+        nonlocal any_hit
+        any_hit = True
+        for t in types:
+            if t and t not in seen:
+                seen.add(t)
+                allowed.append(t)
+
+    def _match_one(raw: str):
+        std = resolve_to_standard_name(raw) or raw
+        # 管口附件 tab 可能带序号：接管法兰配对法兰2 → 接管法兰配对法兰
+        std_no_num = re.sub(r"\d+$", "", std).strip() or std
+        raw_no_num = re.sub(r"\d+$", "", raw).strip() or raw
+        candidates = []
+        for c in (
+            std, raw, std_no_num, raw_no_num,
+            _strip_part_name_parenthetical(std), _strip_part_name_parenthetical(raw),
+            _strip_part_name_parenthetical(std_no_num), _strip_part_name_parenthetical(raw_no_num),
+        ):
+            if c and c not in candidates:
+                candidates.append(c)
+        for c in candidates:
+            if c in mapping:
+                _add_types(mapping[c])
+                return
+        best_key = ""
+        for key in mapping:
+            if not key:
+                continue
+            if std.endswith(key) or raw.endswith(key) or std_no_num.endswith(key) or raw_no_num.endswith(key):
+                if len(key) > len(best_key):
+                    best_key = key
+        if best_key:
+            _add_types(mapping[best_key])
+
+    for n in names:
+        _match_one(n)
+
+    return allowed if any_hit else None
+
+
+def parse_component_names_cell(raw: str) -> List[str]:
+    """解析合并元件「元件名称」单元格：JSON 数组 / 顿号分隔 / 单值。"""
+    s = (raw or "").strip()
+    if not s or s == "[]":
+        return []
+    if s.startswith("[") and s.endswith("]"):
+        try:
+            parsed = json.loads(s)
+            if isinstance(parsed, list):
+                return [str(x).strip() for x in parsed if str(x).strip()]
+        except Exception:
+            pass
+    if "、" in s:
+        return [x.strip() for x in s.split("、") if x.strip()]
+    if "," in s:
+        return [x.strip() for x in s.split(",") if x.strip()]
+    return [s]
+
+
+def get_filtered_material_options(selected: dict = None, element_name=None) -> dict:
+    """
+    根据当前已选字段，查询材料表，返回所有材料字段的可选项。
+    element_name：可选，传入时仅对「材料类型」按下拉限制表过滤；牌号/标准/供货状态仍按级联条件查询。
+    """
+    selected = selected or {}
     material_fields = ['材料类型', '材料牌号', '材料标准', '供货状态']
     where_clause = " AND ".join(f"{col} = %s" for col in selected if selected[col])
     values = [selected[col] for col in selected if selected[col]]
@@ -1741,9 +1903,18 @@ def get_filtered_material_options(selected: dict) -> dict:
                 val = row[col]
                 if isinstance(val, str):
                     val = val.strip()
-                result[col].add(val)
+                # 跳过空/NULL，避免 sorted 混入 None 报错
+                if val:
+                    result[col].add(val)
 
-        return {col: sorted(result[col]) for col in material_fields}
+        out = {col: sorted(result[col]) for col in material_fields}
+        if element_name:
+            allowed = get_allowed_material_types(element_name)
+            if allowed is not None:
+                have = set(out.get("材料类型") or [])
+                # 保持附表/库中配置顺序，且必须真实存在于材料表
+                out["材料类型"] = [t for t in allowed if t in have]
+        return out
     finally:
         connection.close()
 

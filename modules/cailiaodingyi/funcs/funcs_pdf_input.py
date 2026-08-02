@@ -6,7 +6,11 @@ from collections import defaultdict
 from PyQt5.QtWidgets import QTableWidget
 
 from modules.cailiaodingyi.db_cnt import get_connection
-from modules.cailiaodingyi.funcs.funcs_pdf_change import DEBUG_VERBOSE_DEFINE_UI
+from modules.cailiaodingyi.funcs.funcs_pdf_change import (
+    DEBUG_VERBOSE_DEFINE_UI,
+    PULL_OUT_TEST_PARAM_NAME,
+    resolve_pull_out_test_default_from_user_config,
+)
 import pymysql
 
 
@@ -460,7 +464,12 @@ def insert_element_para_data(product_id, guankou_para_info):
                 print(f"产品ID{product_id} 对应的元件附加参数信息已存在，跳过插入")
                 return
 
+            pull_out_test_default = resolve_pull_out_test_default_from_user_config()
             for item in guankou_para_info:
+                param_name = str(item.get('参数名称', '') or '').strip()
+                param_value = item.get('参数数值', '')
+                if param_name == PULL_OUT_TEST_PARAM_NAME:
+                    param_value = pull_out_test_default
                 sql = """
                     INSERT INTO 产品设计活动表_元件附加参数表
                     (元件附加参数ID, 产品ID, 元件ID, 元件名称, 参数名称, 参数值, 参数单位)
@@ -473,7 +482,7 @@ def insert_element_para_data(product_id, guankou_para_info):
                     item['元件ID'],
                     item['元件名称'],
                     item['参数名称'],
-                    item['参数数值'],
+                    param_value,
                     item['参数单位']
                 ))
 

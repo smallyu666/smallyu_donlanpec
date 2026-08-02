@@ -48,6 +48,9 @@ from modules.cailiaodingyi.controllers.structure_tree import (
 )
 from modules.cailiaodingyi.controllers.style import (
     ReturnKeyJumpFilter,
+    install_editable_only_tab,
+    skip_tab_bar_focus,
+    focus_first_editable_cell,
     apply_confirm_clear_button_icons,
     apply_dialog_style,
     apply_structure_batch_button_icons,
@@ -2105,12 +2108,20 @@ class DesignParameterDefineInputerViewer(QWidget):
         self.tableWidget_parts.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.tableWidget_parts.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.tableWidget_parts.installEventFilter(ReturnKeyJumpFilter(self.tableWidget_parts))
+        # 左侧零部件预览表：Tab 不在表内换格，第一次 Tab 直接进入右侧详细定义可输入格
+        install_editable_only_tab(
+            self.tableWidget_parts,
+            mode="none",
+            jump_to_getter=self.get_current_param_detail_table,
+        )
         self.stackedWidget = self.findChild(QtWidgets.QStackedWidget, "stackedWidget")
         self.textBrowser_part_image = self.findChild(QtWidgets.QTextBrowser, "textBrowser")
         # 获取右侧表格控件
         self.tableWidget_detail = self.findChild(QtWidgets.QTableWidget, "tableWidget_para")
         # 绘制非管口参数表头
         self.tableWidget_detail.setHorizontalHeader(CustomHeaderView(QtCore.Qt.Horizontal, self.tableWidget_detail))
+        # 普通元件详细定义：Tab 仅可输入的参数值格（跳过参数名称/单位/只读的元件名称）
+        install_editable_only_tab(self.tableWidget_detail, mode="editable")
         self.pushButton_detail = self.findChild(QPushButton, "pushButton_8")
         if self.pushButton_detail:
             self.pushButton_detail.clicked.connect(lambda: on_confirm_param_update(self))
@@ -2143,11 +2154,19 @@ class DesignParameterDefineInputerViewer(QWidget):
         # 获取管口表格控件（第一个tab页）
         self.tableWidget_guankou = self.findChild(QtWidgets.QTableWidget, "tableWidget_define1")
         self.tableWidget_guankou.cellClicked.connect(self.on_guankou_cell_clicked)
+        install_editable_only_tab(self.tableWidget_guankou, mode="editable")
 
         # 获取第二个tab页的表格控件（管口材料分类2）
         self.tableWidget_guankou_2 = self.findChild(QtWidgets.QTableWidget, "tableWidget_define1_5")
         if self.tableWidget_guankou_2:
             self.tableWidget_guankou_2.cellClicked.connect(self.on_guankou_cell_clicked)
+            install_editable_only_tab(self.tableWidget_guankou_2, mode="editable")
+
+        # 合并元件 / 紧固件 / 管口附件 UI 预置表：同样限制 Tab 仅可输入格
+        for _tn in ("tableWidget_define1_2", "tableWidget_define1_3", "tableWidget_define1_4"):
+            _tw = self.findChild(QtWidgets.QTableWidget, _tn)
+            if _tw is not None:
+                install_editable_only_tab(_tw, mode="editable")
 
         # 通用元件的清空
         self.pushButton_clear = self.findChild(QPushButton, "pushButton_9")
@@ -2235,6 +2254,13 @@ class DesignParameterDefineInputerViewer(QWidget):
 
         # 获取管口定义对应的tabs
         self.guankou_tabWidget = self.findChild(QTabWidget, "tabWidget")
+        skip_tab_bar_focus(self.guankou_tabWidget)
+        # 合并元件 / 紧固件 / 管口附件 的页签标题不进 Tab 链
+        for _tw_name in ("tabWidget_2", "tabWidget_3", "tabWidget_4"):
+            _tw = self.findChild(QTabWidget, _tw_name)
+            if _tw is not None:
+                setattr(self, _tw_name, _tw)
+                skip_tab_bar_focus(_tw)
         # self.guankou_tabWidget.currentChanged.connect(self.on_tab_changed)
         # 第一个 tab 页
         self.default_param_table = self.tableWidget_guankou  # 记录真正默认页的表
@@ -2323,6 +2349,57 @@ class DesignParameterDefineInputerViewer(QWidget):
 
         # 用户修改，才标记未保存
         self.detail_table_modified = True
+
+    def get_current_param_detail_table(self):
+        """
+        返回当前右侧“详细定义”里正在显示的参数表。
+        供左侧表第一次按 Tab 时直接跳入可输入格。
+        """
+        from PyQt5.QtWidgets import QTableWidget, QTabWidget
+
+        def _table_from_tab_widget(tw):
+            if tw is None or not tw.isVisible():
+                return None
+            idx = tw.currentIndex()
+            if idx < 0:
+                return None
+            name = (tw.tabText(idx) or "").strip()
+            if name in {"+", "＋"}:
+                return None
+            page = tw.widget(idx)
+            if page is None:
+                return None
+            table = page.property("param_table")
+            if table is not None:
+                return table
+            tables = page.findChildren(QTableWidget)
+            return tables[0] if tables else None
+
+        # 按 stacked 当前页优先找对应 TabWidget
+        candidates = [
+            getattr(self, "guankou_tabWidget", None),
+            getattr(self, "tabWidget_2", None),
+            getattr(self, "tabWidget_3", None),
+            getattr(self, "tabWidget_4", None),
+            getattr(self, "tabWidget_attachment", None),
+        ]
+        # 再兜底 findChild（属性可能尚未挂上）
+        for name in ("tabWidget", "tabWidget_2", "tabWidget_3", "tabWidget_4"):
+            tw = self.findChild(QTabWidget, name)
+            if tw is not None and tw not in candidates:
+                candidates.append(tw)
+
+        for tw in candidates:
+            table = _table_from_tab_widget(tw)
+            if table is not None and table.isVisible():
+                return table
+
+        # 普通元件：page_2 的 tableWidget_para
+        for attr in ("tableWidget_para_define", "tableWidget_detail", "tableWidget_para"):
+            table = getattr(self, attr, None)
+            if table is not None and table.isVisible():
+                return table
+        return None
 
     def on_left_table_cell_clicked(self, row, col):
         """
@@ -2820,6 +2897,7 @@ class DesignParameterDefineInputerViewer(QWidget):
         table_guankou = QTableWidget()
         table_guankou.setHorizontalHeader(CustomHeaderView(QtCore.Qt.Horizontal, table_guankou))
         table_guankou.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
+        install_editable_only_tab(table_guankou, mode="editable")
 
         page = QtWidgets.QWidget()
         main_layout = QtWidgets.QVBoxLayout(page)
@@ -3018,6 +3096,7 @@ class DesignParameterDefineInputerViewer(QWidget):
         table = QTableWidget()
         table.setHorizontalHeader(CustomHeaderView(QtCore.Qt.Horizontal, table))
         table.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
+        install_editable_only_tab(table, mode="editable")
         layout = page.layout()
         if layout is None:
             layout = QtWidgets.QVBoxLayout(page)
@@ -3680,6 +3759,7 @@ class DesignParameterDefineInputerViewer(QWidget):
         table = QTableWidget()
         table.setHorizontalHeader(CustomHeaderView(QtCore.Qt.Horizontal, table))
         table.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
+        install_editable_only_tab(table, mode="editable")
 
         # —— 页壳 + 布局（完全复制第0页的边距/间距/样式）——
         page = QtWidgets.QWidget()

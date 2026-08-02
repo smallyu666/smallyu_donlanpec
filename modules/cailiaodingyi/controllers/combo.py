@@ -493,8 +493,68 @@ class DynamicOptionsDelegate(ComboDelegate):
         gi = self.row2group.get(row, None)
         return (self.groups[gi] if gi is not None and 0 <= gi < len(self.groups) else {})
 
-    def _all_material_types(self):
-        all_map = get_filtered_material_options({}) or {}
+    def _part_name_for_type_filter(self, row: int, col: int = None):
+        """
+        管口多列：从参数名前缀推断零件（接管法兰/补强圈/接管）。
+        设备法兰紧固件：按当前列读「元件类型」（螺柱/螺母）。
+        否则回退到 table._material_type_filter_name / _element_name。
+        """
+        try:
+            it = self.table.item(row, 0) if self.table else None
+            raw = (it.text() or "").strip() if it else ""
+        except Exception:
+            raw = ""
+        if raw:
+            if "接管法兰" in raw:
+                return "接管法兰"
+            if "补强圈" in raw:
+                return "补强圈"
+            if "接管" in raw:
+                return "接管"
+
+        # 设备法兰紧固件：材料类型按列对应「元件类型」= 螺柱 / 螺母
+        try:
+            elem_type_row = None
+            for r in range(self.table.rowCount() if self.table else 0):
+                pit = self.table.item(r, 0)
+                if pit and pit.text().strip() == "元件类型":
+                    elem_type_row = r
+                    break
+            if elem_type_row is not None and col is not None and col >= 1:
+                vit = self.table.item(elem_type_row, col)
+                part = (vit.text() or "").strip() if vit else ""
+                if part:
+                    return part
+            # 无列信息时：若表上存在元件类型行，按螺柱/螺母并集过滤（二者均为钢棒）
+            if elem_type_row is not None:
+                parts = []
+                for c in range(1, self.table.columnCount()):
+                    vit = self.table.item(elem_type_row, c)
+                    p = (vit.text() or "").strip() if vit else ""
+                    if p and p not in parts:
+                        parts.append(p)
+                if parts:
+                    return parts
+        except Exception:
+            pass
+
+        for attr in ("_material_type_filter_name", "_element_name"):
+            try:
+                v = getattr(self.table, attr, None)
+            except Exception:
+                v = None
+            if v:
+                # 父级名「设备法兰紧固件」本身不在允许表中，勿直接用作过滤键
+                if isinstance(v, str) and v.strip() == "设备法兰紧固件":
+                    continue
+                if isinstance(v, (list, tuple)) and len(v) == 1 and str(v[0]).strip() == "设备法兰紧固件":
+                    continue
+                return v
+        return ""
+
+    def _all_material_types(self, row: int = -1, col: int = None):
+        part = self._part_name_for_type_filter(row, col) if row >= 0 else ""
+        all_map = get_filtered_material_options({}, element_name=part or None) or {}
         # 去重保序
         return list(dict.fromkeys(all_map.get('材料类型', [])))
 
@@ -512,13 +572,14 @@ class DynamicOptionsDelegate(ComboDelegate):
             it = self.table.item(rr, col) if rr is not None else None
             selected[k] = (it.text().strip() if it else "")
 
+        part = self._part_name_for_type_filter(row, col)
         if field == '材料类型':
-            opts = self._all_material_types()
+            opts = self._all_material_types(row, col)
         else:
             # 供货状态/材料标准/材料牌号：过滤条件不包含当前字段本身，否则会只返回当前选中值（如选正火后下拉只显示正火）
             # 参照普通元件 datamanager 中 basis_stat 的写法：供货状态选项基于 材料类型+牌号+标准，不包含供货状态
             basis = {k: v for k, v in selected.items() if k != field and v}
-            all_options = get_filtered_material_options(basis) or {}
+            all_options = get_filtered_material_options(basis, element_name=part or None) or {}
             opts = all_options.get(field, [])
 
         if not opts or opts[0] != "":
@@ -624,14 +685,16 @@ class BulkFillDynamicOptionsDelegate(DynamicOptionsDelegate):
                 # 基于【该列】当前选择组合拿候选
                 cur_vals = self._current_group_values_at_col(group_map, cc)
 
+                type_row = group_map.get('材料类型')
+                part = self._part_name_for_type_filter(type_row if type_row is not None else row, cc)
                 if sender_field == '材料类型':
-                    # 材料类型的候选是全集（和你现逻辑一致）
-                    all_map = get_filtered_material_options({}) or {}
+                    # 材料类型候选按零件允许表过滤
+                    all_map = get_filtered_material_options({}, element_name=part or None) or {}
                     opts = list(dict.fromkeys(all_map.get('材料类型', [])))
                 else:
                     # 供货状态等：过滤条件不包含当前字段本身
                     basis = {k: v for k, v in cur_vals.items() if k != sender_field and v}
-                    filtered = get_filtered_material_options(basis) or {}
+                    filtered = get_filtered_material_options(basis, element_name=part or None) or {}
                     opts = filtered.get(sender_field, []) or []
 
                 # 保留你之前的“首个空项”习惯
@@ -885,16 +948,20 @@ class MultiSelectDynamicOptionsDelegate(DynamicOptionsDelegate):
                     cur_vals[k] = (it.text().strip() if it else "")
 
                 # 候选生成逻辑：材料牌号只看“类型”，供货状态/材料标准不包含自身
+                type_row = grp.get('材料类型')
+                part = self._part_name_for_type_filter(type_row if type_row is not None else row, cc)
                 if sender_field == '材料类型':
-                    all_map = get_filtered_material_options({}) or {}
+                    all_map = get_filtered_material_options({}, element_name=part or None) or {}
                     opts = list(dict.fromkeys(all_map.get('材料类型', [])))
                 else:
                     if sender_field == '材料牌号' and cur_vals.get('材料类型'):
-                        filtered = get_filtered_material_options({'材料类型': cur_vals['材料类型']}) or {}
+                        filtered = get_filtered_material_options(
+                            {'材料类型': cur_vals['材料类型']}, element_name=part or None
+                        ) or {}
                         opts = filtered.get('材料牌号', []) or []
                     else:
                         basis = {k: v for k, v in cur_vals.items() if k != sender_field and v}
-                        filtered = get_filtered_material_options(basis) or {}
+                        filtered = get_filtered_material_options(basis, element_name=part or None) or {}
                         opts = filtered.get(sender_field, []) or []
 
                 if not opts or (opts and opts[0] != ""):

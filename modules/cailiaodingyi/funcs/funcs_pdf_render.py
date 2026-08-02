@@ -240,8 +240,41 @@ def _apply_material_paste_batch(table, col: int, rows_map: dict, new_vals: dict)
         '供货状态': _get(rows_map.get('供货状态')),
     }
 
+    part_name = getattr(table, "_material_type_filter_name", None) or getattr(table, "_element_name", None)
+    if isinstance(part_name, str) and part_name.strip() == "设备法兰紧固件":
+        part_name = None
+    type_r = rows_map.get('材料类型')
+    if type_r is not None:
+        try:
+            pit = table.item(type_r, 0)
+            raw = (pit.text() or "").strip() if pit else ""
+            if "接管法兰" in raw:
+                part_name = "接管法兰"
+            elif "补强圈" in raw:
+                part_name = "补强圈"
+            elif "接管" in raw:
+                part_name = "接管"
+        except Exception:
+            pass
+    # 设备法兰紧固件粘贴校验：按当前列「元件类型」过滤
+    if part_name is None and getattr(table, "_is_fastener_table", False):
+        try:
+            elem_type_row = None
+            for r in range(table.rowCount()):
+                it = table.item(r, 0)
+                if it and it.text().strip() == "元件类型":
+                    elem_type_row = r
+                    break
+            if elem_type_row is not None:
+                vit = table.item(elem_type_row, col)
+                p = (vit.text() or "").strip() if vit else ""
+                if p:
+                    part_name = p
+        except Exception:
+            pass
+
     # 2) 基于当前选择拿候选
-    filtered = get_filtered_material_options(cur) or {}
+    filtered = get_filtered_material_options(cur, element_name=part_name or None) or {}
     def _opts_of(k):
         opts = filtered.get(k, []) or []
         if not opts or opts[0] != "":  # 保留你的“首个空项”习惯
@@ -267,7 +300,7 @@ def _apply_material_paste_batch(table, col: int, rows_map: dict, new_vals: dict)
         filtered2 = get_filtered_material_options({
             '材料类型': cur['材料类型'],
             '材料牌号': cur['材料牌号'],
-        }) or {}
+        }, element_name=part_name or None) or {}
 
         def _autofill_one(key):
             r = rows_map.get(key)
@@ -1991,6 +2024,11 @@ def render_fastener_param_to_ui(viewer_instance, fastener_para_info: list):
                 table.setProperty('gk_code_candidates', filtered_component_opts)
             except Exception:
                 pass
+            try:
+                from modules.cailiaodingyi.controllers.style import install_editable_only_tab
+                install_editable_only_tab(table, mode="editable")
+            except Exception:
+                pass
         else:
             # 创建新的tab页（设备法兰紧固件使用 tabWidget_3）
             from PyQt5 import QtWidgets, QtCore
@@ -2006,6 +2044,11 @@ def render_fastener_param_to_ui(viewer_instance, fastener_para_info: list):
             table = QTableWidget()
             if CustomHeaderView:
                 table.setHorizontalHeader(CustomHeaderView(QtCore.Qt.Horizontal, table))
+            try:
+                from modules.cailiaodingyi.controllers.style import install_editable_only_tab
+                install_editable_only_tab(table, mode="editable")
+            except Exception:
+                pass
             table.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
             main_layout = QtWidgets.QVBoxLayout(page)
             w0 = tw.widget(0) if tw.count() > 0 else None
@@ -2038,6 +2081,12 @@ def render_fastener_param_to_ui(viewer_instance, fastener_para_info: list):
 
         if DEBUG_VERBOSE_DEFINE_UI:
             print(f"[DBG][fastener_render] 完成渲染 {pno_label}，共 {table.rowCount()} 行")
+
+    try:
+        from modules.cailiaodingyi.controllers.style import skip_tab_bar_focus
+        skip_tab_bar_focus(tw)
+    except Exception:
+        pass
 
     try:
         from modules.cailiaodingyi.controllers.add_tab import PlusTabManager
@@ -2343,6 +2392,13 @@ def _render_fastener_table_data(table, data, param_structures, dropdown_options,
     try:
         from modules.cailiaodingyi.funcs.funcs_pdf_render import find_material_groups_fuzzy_strict
         from modules.cailiaodingyi.controllers.combo import MultiSelectDynamicOptionsDelegate
+
+        # 供材料类型过滤识别：按列读「元件类型」= 螺柱/螺母（勿用父级名「设备法兰紧固件」）
+        try:
+            table._element_name = "设备法兰紧固件"
+            table._is_fastener_table = True
+        except Exception:
+            pass
 
         groups, row2field, row2group = find_material_groups_fuzzy_strict(table)
         found_rows = sorted(row2field.keys())
