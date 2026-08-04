@@ -710,7 +710,9 @@ def lock_combo(combo: QComboBox):
             background-color: #EEE;
             color: #555;
             border: 1px solid #CCC;   /* 浅灰边框 */
-            padding: 2px 6px;
+            min-height: 29px;
+            max-height: 29px;
+            padding: 2px 8px;
         }
         QComboBox::drop-down {
             subcontrol-origin: padding;
@@ -746,6 +748,8 @@ def unlock_combo(combo: QComboBox):
             color: black;
             border: 1px solid rgb(180, 180, 180);  /* 中灰边框 */
             border-radius: 2px;
+            min-height: 29px;
+            max-height: 29px;
             padding: 2px 8px 2px 8px;  /* 限制上下内边距为 2px，左右为 8px */
             font-size: 9pt;           /* 字体字号改为标准的 9pt */
             font-family: '宋体';
@@ -788,7 +792,9 @@ def lock_line_edit(line_edit: QLineEdit):
         QLineEdit {
             background-color: #EEE;
             color: #555;
-            padding: 0px;
+            min-height: 29px;
+            max-height: 29px;
+            padding: 2px 8px;
         }
     """)
 
@@ -796,8 +802,13 @@ def lock_line_edit(line_edit: QLineEdit):
 def unlock_line_edit(line_edit: QLineEdit):
     line_edit.setEnabled(True)
     line_edit.setReadOnly(False)
-    line_edit.setStyleSheet("")
-
+    line_edit.setStyleSheet("""
+        QLineEdit {
+            min-height: 29px;
+            max-height: 29px;
+            padding: 2px 8px;
+        }
+    """)
 
 # --- 产品定义区控件统一复位 ---改77
 def reset_product_definition_controls():
@@ -1084,6 +1095,22 @@ def on_product_row_clicked(row, column):
         product_manager.update_product_id(PRODUCT_ID)  # 第二个文件会自动收到新值改66
         # 行切换后强制刷新示意图：若类型/型式与上一行相同，setCurrentText 不会触发 currentTextChanged，try_show_image 不会跑
         try_show_image()
+
+        # 未保存切行后再选回：按库中已加载的类型/型式恢复“已定义”状态，避免类型/型式被解锁、模块误判未定义
+        product_type_text = (bianl.product_type_combo.currentText() or "").strip()
+        product_form_text = (bianl.product_form_combo.currentText() or "").strip()
+        if product_type_text and product_form_text:
+            row_status["definition_status"] = "view"
+            row_status["definition_dirty"] = False
+            definition_status = "view"
+            print(f"[on_product_row_clicked] 第{row + 1}行库中已有类型/型式，恢复 definition_status=view")
+        else:
+            row_status["definition_dirty"] = False
+            if row_status.get("definition_status") == "view":
+                row_status["definition_status"] = "edit"
+                definition_status = "edit"
+                print(f"[on_product_row_clicked] 第{row + 1}行无类型/型式，definition_status=edit")
+
         try:
             from modules.chanpinguanli import local_product_folder
             local_product_folder.maybe_prompt_local_product_recovery(
@@ -1099,10 +1126,9 @@ def on_product_row_clicked(row, column):
 
 
     elif definition_status == "edit":
-        # unlock_combo(bianl.product_type_combo)
-        # unlock_combo(bianl.product_form_combo)
-        # unlock_combo(bianl.design_stage_combo)
-        pass
+        # 未完成首次定义：保持 reset 后的可编辑；已定义产品不会走到这里（上面已恢复为 view）
+        unlock_combo(bianl.product_type_combo)
+        unlock_combo(bianl.product_form_combo)
     elif definition_status == "start":
         lock_combo(bianl.product_type_combo)
         lock_combo(bianl.product_form_combo)
@@ -1851,6 +1877,7 @@ def confirm_product_definition():
         if row not in bianl.product_table_row_status or not isinstance(bianl.product_table_row_status[row], dict):
             bianl.product_table_row_status[row] = {}
         bianl.product_table_row_status[row]["definition_status"] = "view"
+        bianl.product_table_row_status[row]["definition_dirty"] = False
         if bianl.product_id:
             bianl.product_table_row_status[row]["product_id"] = bianl.product_id
         print(f"第 {row} 行定义状态已更新: view（保存成功）")
@@ -2239,6 +2266,23 @@ def show_product_table_context_menu(pos):
 
     table.setCurrentCell(clicked_row, 1 if table.columnCount() > 1 else 0)
     menu = QtWidgets.QMenu(table)
+    # 父级表格选中格为白字，菜单继承调色板后会出现「选中项白底白字」导致文字消失
+    menu.setStyleSheet("""
+        QMenu {
+            background-color: #ffffff;
+            color: #000000;
+            border: 1px solid #c0c0c0;
+        }
+        QMenu::item {
+            background-color: transparent;
+            color: #000000;
+            padding: 4px 24px;
+        }
+        QMenu::item:selected {
+            background-color: #0078d7;
+            color: #ffffff;
+        }
+    """)
     copy_action = menu.addAction("复制产品")
     chosen_action = menu.exec_(table.viewport().mapToGlobal(pos))
     if chosen_action == copy_action:

@@ -76,7 +76,9 @@ def lock_combo(combo: QComboBox):
             background-color: #EEE;
             color: #555;
             border: 1px solid #CCC;   /* 浅灰边框 */
-            padding: 2px 6px;
+            min-height: 29px;
+            max-height: 29px;
+            padding: 2px 8px;
         }
         QComboBox::drop-down {
             subcontrol-origin: padding;
@@ -105,7 +107,14 @@ def unlock_combo(combo: QComboBox):
                 color: black;
                 border: 1px solid rgb(180, 180, 180);  /* 中灰边框 */
                 border-radius: 2px;
-                padding: 6px 30px 6px 8px;  /* 左右内边距大一点，给右侧箭头留空间 */
+                min-height: 29px;
+                max-height: 29px;
+                padding: 2px 8px 2px 8px;
+                font-size: 9pt;
+                font-family: '宋体';
+            }}
+
+            QComboBox QAbstractItemView {{
                 font-size: 11pt;
                 font-family: '宋体';
             }}
@@ -118,15 +127,15 @@ def unlock_combo(combo: QComboBox):
             QComboBox::drop-down {{
                 subcontrol-origin: padding;
                 subcontrol-position: top right;
-                width: 30px;
+                width: 24px;
                 border: none;
                 background: transparent;
             }}
 
             QComboBox::down-arrow {{
                 image: url("{image_path}");
-                width: 30px;
-                height: 20px;
+                width: 14px;
+                height: 14px;
             }}
         """)
 
@@ -138,7 +147,9 @@ def lock_line_edit(line_edit: QLineEdit):
         QLineEdit {
             background-color: #EEE;
             color: #555;
-            padding: 0px;
+            min-height: 29px;
+            max-height: 29px;
+            padding: 2px 8px;
         }
     """)
 
@@ -146,7 +157,13 @@ def lock_line_edit(line_edit: QLineEdit):
 def unlock_line_edit(line_edit: QLineEdit):
     line_edit.setEnabled(True)
     line_edit.setReadOnly(False)
-    line_edit.setStyleSheet("")
+    line_edit.setStyleSheet("""
+        QLineEdit {
+            min-height: 29px;
+            max-height: 29px;
+            padding: 2px 8px;
+        }
+    """)
 
 # 1015
 def clear_and_lock_product_details():

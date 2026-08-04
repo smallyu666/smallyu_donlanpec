@@ -2,9 +2,10 @@ import os
 import shutil
 
 from PyQt5.QtCore import QTimer
+from PyQt5.QtGui import QFont
+from PyQt5.QtWidgets import QApplication, QMessageBox, QPushButton, QLineEdit, QStyleFactory
 
 import modules.chanpinguanli.bianl as bianl
-from PyQt5.QtWidgets import QMessageBox, QPushButton, QLineEdit, QStyleFactory
 import modules.chanpinguanli.common_usage as common_usage
 import modules.chanpinguanli.open_project as open_project
 
@@ -55,6 +56,22 @@ QPushButton:disabled {
 }
 """
 
+# 项目管理确认框观感：白底 + 宋体正文（与截图一致；按钮字体仍由 MSGBOX_BUTTON_STYLE 控制）
+MSGBOX_DIALOG_STYLE = """
+QMessageBox {
+    background-color: #ffffff;
+    color: #000000;
+    font-family: "宋体", SimSun;
+    font-size: 12pt;
+}
+QMessageBox QLabel {
+    background: transparent;
+    color: #000000;
+    font-family: "宋体", SimSun;
+    font-size: 12pt;
+}
+""" + MSGBOX_BUTTON_STYLE
+
 _FUSION_STYLE = None
 
 
@@ -65,14 +82,28 @@ def _fusion_style():
     return _FUSION_STYLE
 
 
+def _msgbox_body_font():
+    """项目管理弹窗正文：宋体，字号至少 12pt。"""
+    font = QFont(QApplication.font())
+    family = (font.family() or "").strip()
+    if family not in ("宋体", "SimSun"):
+        font.setFamily("宋体")
+    if font.pointSize() > 0 and font.pointSize() < 12:
+        font.setPointSize(12)
+    elif font.pointSize() <= 0:
+        font.setPointSize(12)
+    return font
+
+
 def apply_msgbox_button_style(msg_box):
-    """给 QMessageBox 按钮套用项目管理同款扁平样式。"""
+    """给 QMessageBox 套用项目管理同款：白底、宋体正文、扁平按钮。"""
     if msg_box is None:
         return
     fusion = _fusion_style()
     if fusion is not None:
         msg_box.setStyle(fusion)
-    msg_box.setStyleSheet(MSGBOX_BUTTON_STYLE)
+    msg_box.setFont(_msgbox_body_font())
+    msg_box.setStyleSheet(MSGBOX_DIALOG_STYLE)
     for btn in msg_box.buttons():
         if fusion is not None:
             btn.setStyle(fusion)

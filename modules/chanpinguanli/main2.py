@@ -605,6 +605,7 @@ class cpgl_Stats(QtWidgets.QWidget):
         if ok:
             if isinstance(st, dict):
                 st["definition_status"] = "view"
+                st["definition_dirty"] = False
                 print(f"【调试】第{row + 1}行 definition_status 复位为 view（定义/工作信息已保存）")
             if hasattr(self, "mark_clean"):
                 self.mark_clean()
@@ -628,7 +629,12 @@ class cpgl_Stats(QtWidgets.QWidget):
 
     # ======【项目管理页：脏标记与保存包装】======
     def _set_definition_edit_flag(self, *args):
-        """当前产品行进入编辑：把 definition_status=edit"""
+        """标记定义/工作信息有未保存修改。
+
+        已定义产品（definition_status=view）只置 definition_dirty，不改为 edit，
+        避免未保存切行后再选回来时类型/型式被解锁、后续模块误判未定义。
+        尚未完成首次定义的产品仍置 definition_status=edit。
+        """
         try:
             row = bianl.product_table.currentRow()
             if row is None or row < 0:
@@ -636,8 +642,13 @@ class cpgl_Stats(QtWidgets.QWidget):
             row_status = bianl.product_table_row_status.get(row)
             if not isinstance(row_status, dict):
                 return
-            # 只有有 product_id 的行才算“已有定义，可编辑”
+            # 只有有 product_id 的行才算“已有产品，可编辑定义区”
             if not row_status.get("product_id"):
+                return
+            if row_status.get("definition_status") == "view":
+                if not row_status.get("definition_dirty"):
+                    row_status["definition_dirty"] = True
+                    print(f"【调试】第{row + 1}行 definition_dirty=True（已定义产品，未保存修改）")
                 return
             if row_status.get("definition_status") != "edit":
                 row_status["definition_status"] = "edit"
@@ -765,30 +776,7 @@ class cpgl_Stats(QtWidgets.QWidget):
             # 建议：成功后，必要时可刷新一次界面并在刷新完成后保持 _dirty=False
             # 例如：self.reload_from_db(...)
 # lxy新增结束
-    def closeEvent(self, event):
-        # 检查有没有保存
-        if not self.check_if_all_saved():
-            # 自定义按钮文本
-            msg_box = QMessageBox(self)
-            msg_box.setWindowTitle("未保存的更改")
-            msg_box.setText("存在未保存的信息，是否仍要退出？")
-            msg_box.setIcon(QMessageBox.Warning)
-
-            # 自定义按钮
-            yes_button = QPushButton("是")
-            no_button = QPushButton("否")
-
-            msg_box.addButton(yes_button, QMessageBox.YesRole)
-            msg_box.addButton(no_button, QMessageBox.NoRole)
-
-            # 显示对话框并获取结果
-            result = msg_box.exec_()
-
-            if msg_box.clickedButton() == no_button:
-                event.ignore()  # 如果点击的是“否”，忽略退出操作
-                return
-        event.accept()
-    # 检查是否进行保存
+    # 检查是否进行保存（供 main.py 关 Tab / 关主窗口调用；关闭确认弹窗由主窗口统一处理）
     def check_if_all_saved(self):
         print("【调试】开始检查是否有未保存数据...")
 
@@ -849,9 +837,10 @@ class cpgl_Stats(QtWidgets.QWidget):
             if current_row is not None:
                 status_dict = bianl.product_table_row_status.get(current_row, {})
                 def_status = status_dict.get("definition_status", "view")
-                print(f"【调试】[产品定义] 当前产品行 {current_row + 1} definition_status = {def_status}")
+                def_dirty = bool(status_dict.get("definition_dirty"))
+                print(f"【调试】[产品定义] 当前产品行 {current_row + 1} definition_status = {def_status}, dirty = {def_dirty}")
 
-                if def_status == "edit":
+                if def_status == "edit" or def_dirty:
                     # 定义区
                     definition_fields = {
                         "产品类型": bianl.product_type_combo.currentText().strip(),
