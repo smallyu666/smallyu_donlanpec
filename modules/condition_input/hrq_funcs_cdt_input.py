@@ -2746,8 +2746,12 @@ def validate_required_fields(table_widget, mode="设计数据"):
     检查带星号的“参数名称”对应的必填字段是否为空
     - mode="设计数据"：要求壳程数值、管程数值必须填写
     - mode="通用数据"：要求参数值必须填写
-    - 特殊强制：进、出口压力差 的管程数值为必填
+    - 特殊强制：隔板两侧压力差值* 的管程数值为必填
     """
+    from modules.condition_input.funcs.funcs_def_check import (
+        param_name_from_item,
+        is_baffle_side_pressure_diff_starred,
+    )
     required_col_name = {
         "设计数据": ["壳程数值", "管程数值"],
         "通用数据": ["数值"]
@@ -2771,12 +2775,12 @@ def validate_required_fields(table_widget, mode="设计数据"):
         name_item = table_widget.item(row, name_col)
         if not name_item:
             continue
-        name_text = name_item.text().strip()
+        name_text = param_name_from_item(name_item)
 
         # ✅ 常规：带 * 的参数检查 修改！！！！
         if "*" in name_text:
-            # 特殊项：进、出口压力差* 只检查管程数值
-            if name_text == "进、出口压力差*":
+            # 特殊项：隔板两侧压力差值* / 旧名进、出口压力差* 只检查管程数值
+            if is_baffle_side_pressure_diff_starred(name_text):
                 col = header_map.get("管程数值")
                 if col is not None:
                     val_item = table_widget.item(row, col)
@@ -2788,14 +2792,6 @@ def validate_required_fields(table_widget, mode="设计数据"):
                     if not val_item or not val_item.text().strip():
                         missing_rows.append((row, name_text))
                         break
-
-        # ✅ 强制补充项：进、出口压力差 的“管程数值”必须填写
-        if mode == "设计数据" and name_text == "进、出口压力差":
-            col = header_map.get("管程数值")
-            if col is not None:
-                val_item = table_widget.item(row, col)
-                if not val_item or not val_item.text().strip():
-                    missing_rows.append((row, name_text + "（管程）"))
 
     return len(missing_rows) > 0, missing_rows
 
@@ -2879,6 +2875,8 @@ def validate_design_table_cell(param_name: str, column_name: str, value: str, li
             ("设计温度（最高）*", "管程数值"): check_design_temp_max,
             ("最低设计温度", "壳程数值"): check_design_temp_min,
             ("最低设计温度", "管程数值"): check_design_temp_min,
+            ("隔板两侧压力差值*（可取隔板两侧计算压降2倍）", "壳程数值"): check_in_out_pressure_gap,
+            ("隔板两侧压力差值*（可取隔板两侧计算压降2倍）", "管程数值"): check_in_out_pressure_gap,
             ("进、出口压力差*", "壳程数值"): check_in_out_pressure_gap,
             ("进、出口压力差*", "管程数值"): check_in_out_pressure_gap,
             ("自定义耐压试验压力（卧）", "壳程数值"): check_def_trail_stand_pressure_lying,

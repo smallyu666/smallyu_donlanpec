@@ -23,7 +23,9 @@ from modules.condition_input.funcs.funcs_cdt_input import load_design_data_if_ex
     restore_default_order, autofill_outer_diameter, autofill_container_outer_diameter, \
     refresh_container_outer_diameter_linkage, CONTAINER_OD_SERIES_DEFAULT, \
     setup_all_condition_tables_proportional_layout, refresh_all_condition_tables_proportional_layout, \
-    refresh_condition_table_proportional_layout, apply_condition_table_cell_tooltips
+    refresh_condition_table_proportional_layout, apply_condition_table_cell_tooltips, \
+    _format_design_param_name_display, _fix_design_data_row_heights
+from modules.condition_input.funcs.funcs_def_check import normalize_param_name, param_name_from_item
 from modules.chanpinguanli.chanpinguanli_main import product_manager
 from modules.condition_input.funcs.design_data_delegate import DesignDataDelegate  # 根据实际路径调整
 # from modules.yudingyi.luoshuan import update_user_config_for_2_6_1
@@ -849,6 +851,11 @@ class DesignConditionInputViewer(QWidget):
                 is_unit_column = key == "参数单位"  # 修改
                 # 0522新修改-ui修改
                 if key == "参数名称":
+                    # 隔板两侧压力差值：显示从括号换行；UserRole 存库内单行名
+                    canonical = normalize_param_name(value)
+                    display = _format_design_param_name_display(canonical)
+                    item.setText(display)
+                    item.setData(Qt.UserRole, canonical)
                     item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
                     item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
                 elif is_name_column:
@@ -865,6 +872,10 @@ class DesignConditionInputViewer(QWidget):
                     item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEditable | Qt.ItemIsEnabled)
 
                 table_widget.setItem(row_idx, col_idx + extra_col, item)
+
+        # 设计数据：仅「隔板两侧压力差值」等含显式换行的行加高，其余保持默认单行高度
+        if table_widget.objectName() == "tableWidget_design_data":
+            _fix_design_data_row_heights(table_widget)
 
         # ✅ 仅对涂漆表设置 logical_headers，避免误操作其他表
         if table_widget.objectName() == "tableWidget_coating_data":
@@ -915,7 +926,7 @@ class DesignConditionInputViewer(QWidget):
             param_item = self.tableWidget_design_data.item(row, 1)
             if not param_item:
                 continue
-            param_name = param_item.text().strip()
+            param_name = param_name_from_item(param_item)
 
             # "沿长度平均的换热管金属温度*" 的壳程数值列（第3列）设为只读
             if param_name == "沿长度平均的换热管金属温度*":
@@ -938,10 +949,11 @@ class DesignConditionInputViewer(QWidget):
         if table is None:
             return -1
         try:
+            target = normalize_param_name(target_name)
             rows = table.rowCount()
             for r in range(rows):
                 item = table.item(r, 1)
-                if item and item.text().strip() == target_name:
+                if item and param_name_from_item(item) == target:
                     return r
         except Exception:
             pass
@@ -1391,16 +1403,13 @@ class DesignConditionInputViewer(QWidget):
             save_all_tables(self, self.product_id)
             # update_user_config_for_2_6_1(product_id, json_path="modules/yudingyi/dn_pressure_table.json")
 
-            # ✅ 保存成功后，同步固定鞍座的鞍座高度
+            # ✅ 保存成功后：按壳程公称直径纠正鞍式支座型号（冲突写 BI），并同步鞍座高度
             try:
-                from modules.cailiaodingyi.controllers.datamanager import sync_saddle_height_on_tab_refresh, \
-                    get_fixed_saddle_element_id_from_db
-                element_id = get_fixed_saddle_element_id_from_db(self.product_id)
-                if element_id:
-                    sync_saddle_height_on_tab_refresh(self.product_id, element_id)
-                    print(f"[条件输入保存] 已同步固定鞍座高度: 产品{self.product_id}")
+                from modules.cailiaodingyi.controllers.datamanager import sync_support_after_condition_dn_change
+                sync_support_after_condition_dn_change(self.product_id)
+                print(f"[条件输入保存] 已同步支座型号/鞍座高度: 产品{self.product_id}")
             except Exception as e:
-                print(f"[条件输入保存] 鞍座高度同步失败: {e}")
+                print(f"[条件输入保存] 支座型号/鞍座高度同步失败: {e}")
 
             # 保存成功后清理状态
             self._validation_triggered = False
@@ -1491,16 +1500,13 @@ class DesignConditionInputViewer(QWidget):
                             raise IOError("保存本地条件文件失败。")
                         save_all_tables(self, self.product_id)
                         # update_user_config_for_2_6_1(product_id, json_path="modules/yudingyi/dn_pressure_table.json")
-                        # ✅ 保存成功后，同步固定鞍座的鞍座高度
+                        # ✅ 保存成功后：按壳程公称直径纠正鞍式支座型号（冲突写 BI），并同步鞍座高度
                         try:
-                            from modules.cailiaodingyi.controllers.datamanager import sync_saddle_height_on_tab_refresh, \
-                                get_fixed_saddle_element_id_from_db
-                            element_id = get_fixed_saddle_element_id_from_db(self.product_id)
-                            if element_id:
-                                sync_saddle_height_on_tab_refresh(self.product_id, element_id)
-                                print(f"[条件输入保存] 已同步固定鞍座高度: 产品{self.product_id}")
+                            from modules.cailiaodingyi.controllers.datamanager import sync_support_after_condition_dn_change
+                            sync_support_after_condition_dn_change(self.product_id)
+                            print(f"[条件输入保存] 已同步支座型号/鞍座高度: 产品{self.product_id}")
                         except Exception as e:
-                            print(f"[条件输入保存] 鞍座高度同步失败: {e}")
+                            print(f"[条件输入保存] 支座型号/鞍座高度同步失败: {e}")
 
                         # 保存成功后，重置状态并允许关闭
                         self._is_modified = False
@@ -1547,16 +1553,13 @@ class DesignConditionInputViewer(QWidget):
                 save_all_tables(self, self.product_id)
                 # update_user_config_for_2_6_1(product_id, json_path="modules/yudingyi/dn_pressure_table.json")
 
-                # ✅ 保存成功后，同步固定鞍座的鞍座高度
+                # ✅ 保存成功后：按壳程公称直径纠正鞍式支座型号（冲突写 BI），并同步鞍座高度
                 try:
-                    from modules.cailiaodingyi.controllers.datamanager import sync_saddle_height_on_tab_refresh, \
-                        get_fixed_saddle_element_id_from_db
-                    element_id = get_fixed_saddle_element_id_from_db(self.product_id)
-                    if element_id:
-                        sync_saddle_height_on_tab_refresh(self.product_id, element_id)
-                        print(f"[条件输入保存] 已同步固定鞍座高度: 产品{self.product_id}")
+                    from modules.cailiaodingyi.controllers.datamanager import sync_support_after_condition_dn_change
+                    sync_support_after_condition_dn_change(self.product_id)
+                    print(f"[条件输入保存] 已同步支座型号/鞍座高度: 产品{self.product_id}")
                 except Exception as e:
-                    print(f"[条件输入保存] 鞍座高度同步失败: {e}")
+                    print(f"[条件输入保存] 支座型号/鞍座高度同步失败: {e}")
 
                 # 保存成功后，重置状态并允许关闭
                 self._is_modified = False
@@ -1622,16 +1625,13 @@ class DesignConditionInputViewer(QWidget):
                             raise IOError("保存本地条件文件失败。")
                         save_all_tables(self, self.product_id)
                         # update_user_config_for_2_6_1(product_id, json_path="modules/yudingyi/dn_pressure_table.json")
-                        # ✅ 保存成功后，同步固定鞍座的鞍座高度
+                        # ✅ 保存成功后：按壳程公称直径纠正鞍式支座型号（冲突写 BI），并同步鞍座高度
                         try:
-                            from modules.cailiaodingyi.controllers.datamanager import sync_saddle_height_on_tab_refresh, \
-                                get_fixed_saddle_element_id_from_db
-                            element_id = get_fixed_saddle_element_id_from_db(self.product_id)
-                            if element_id:
-                                sync_saddle_height_on_tab_refresh(self.product_id, element_id)
-                                print(f"[条件输入保存] 已同步固定鞍座高度: 产品{self.product_id}")
+                            from modules.cailiaodingyi.controllers.datamanager import sync_support_after_condition_dn_change
+                            sync_support_after_condition_dn_change(self.product_id)
+                            print(f"[条件输入保存] 已同步支座型号/鞍座高度: 产品{self.product_id}")
                         except Exception as e:
-                            print(f"[条件输入保存] 鞍座高度同步失败: {e}")
+                            print(f"[条件输入保存] 支座型号/鞍座高度同步失败: {e}")
 
                         # 保存成功后，重置状态并允许切换
                         self._is_modified = False
@@ -1681,16 +1681,13 @@ class DesignConditionInputViewer(QWidget):
                     raise IOError("保存本地条件文件失败。")
                 save_all_tables(self, self.product_id)
                 # update_user_config_for_2_6_1(product_id, json_path="modules/yudingyi/dn_pressure_table.json")
-                # ✅ 保存成功后，同步固定鞍座的鞍座高度
+                # ✅ 保存成功后：按壳程公称直径纠正鞍式支座型号（冲突写 BI），并同步鞍座高度
                 try:
-                    from modules.cailiaodingyi.controllers.datamanager import sync_saddle_height_on_tab_refresh, \
-                        get_fixed_saddle_element_id_from_db
-                    element_id = get_fixed_saddle_element_id_from_db(self.product_id)
-                    if element_id:
-                        sync_saddle_height_on_tab_refresh(self.product_id, element_id)
-                        print(f"[条件输入保存] 已同步固定鞍座高度: 产品{self.product_id}")
+                    from modules.cailiaodingyi.controllers.datamanager import sync_support_after_condition_dn_change
+                    sync_support_after_condition_dn_change(self.product_id)
+                    print(f"[条件输入保存] 已同步支座型号/鞍座高度: 产品{self.product_id}")
                 except Exception as e:
-                    print(f"[条件输入保存] 鞍座高度同步失败: {e}")
+                    print(f"[条件输入保存] 支座型号/鞍座高度同步失败: {e}")
 
                 # 保存成功后，重置状态并允许切换
                 self._is_modified = False

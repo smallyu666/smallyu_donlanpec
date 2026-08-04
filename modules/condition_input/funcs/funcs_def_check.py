@@ -2,6 +2,12 @@ from typing import Tuple, Set
 import re
 from modules.condition_input.funcs.db_cnt import get_connection
 
+# 隔板两侧压力差（原「进、出口压力差*」；库内/校验用单行 canonical 名）
+PARAM_BAFFLE_SIDE_PRESSURE_DIFF = "隔板两侧压力差值*（可取隔板两侧计算压降2倍）"
+PARAM_BAFFLE_SIDE_PRESSURE_DIFF_BASE = "隔板两侧压力差值*"  # 用于显示识别（* 在括号前）
+# 旧名兼容（已建产品活动表可能仍为「进、出口压力差*」）
+PARAM_BAFFLE_SIDE_PRESSURE_DIFF_LEGACY = "进、出口压力差*"
+
 # 0103新修改1-开始
 # 数据库配置（产品条件库）
 db_config_1 = {
@@ -109,6 +115,41 @@ def clear_dn_allowed_values_cache():
     }
 # 0103新修改1-结束
 
+def normalize_param_name(name: str) -> str:
+    """去掉显示用换行，得到与库内一致的参数名称。"""
+    return (name or "").replace("\n", "").replace("\r", "").strip()
+
+
+def param_name_from_item(item) -> str:
+    """
+    读取参数名称：优先 Qt.UserRole（canonical 单行），否则用 text 并去掉换行。
+    """
+    if item is None:
+        return ""
+    try:
+        from PyQt5.QtCore import Qt
+        orig = item.data(Qt.UserRole)
+        if orig is not None and str(orig).strip() != "":
+            return normalize_param_name(str(orig))
+    except Exception:
+        pass
+    return normalize_param_name(item.text() if hasattr(item, "text") else "")
+
+
+def is_baffle_side_pressure_diff_param(name: str) -> bool:
+    """判断是否为隔板两侧压力差值参数（兼容新旧名；活动库均为带 *）。"""
+    n = normalize_param_name(name)
+    return n in (
+        PARAM_BAFFLE_SIDE_PRESSURE_DIFF,
+        PARAM_BAFFLE_SIDE_PRESSURE_DIFF_LEGACY,
+    )
+
+
+def is_baffle_side_pressure_diff_starred(name: str) -> bool:
+    """带 * 的压差参数：保存时只强制管程数值。"""
+    return is_baffle_side_pressure_diff_param(name)
+
+
 def get_param_name(table_widget, row):
     """获取当前表格行的参数名称（根据表格名称判断大表/弹窗）"""
     name = ""
@@ -120,15 +161,14 @@ def get_param_name(table_widget, row):
     # 主界面大表
     if tbl_name == "tableWidget_design_data":
         item = table_widget.item(row, 1)  # 参数名在 col=1
-        if item and item.text().strip():
-            name = item.text().strip()
-            return name
+        name = param_name_from_item(item)
+        return name
 
     # 多工况弹窗
     elif tbl_name == "tableWidget":
         vh_item = table_widget.verticalHeaderItem(row)  # 参数名在 verticalHeader
         if vh_item and vh_item.text().strip():
-            name = vh_item.text().strip()
+            name = normalize_param_name(vh_item.text())
             return name
     return name
 
@@ -347,7 +387,7 @@ def check_work_pressure(value, tip_widget, param_name, column_name, table_widget
     - 必须 < 35
     - 联动检查：
         - 与设计压力*、设计压力2
-        - 与进、出口压力差
+        - 与隔板两侧压力差值
     """
     if value.strip() == "":
         return "ok", ""
@@ -380,7 +420,7 @@ def check_work_pressure(value, tip_widget, param_name, column_name, table_widget
             continue
         if name in ["设计压力*", "设计压力2（设计工况2）"]:
             dp_list.append((name, val))
-        elif name == "进、出口压力差":
+        elif is_baffle_side_pressure_diff_param(name):
             diff_val = val
 
     for name, dp in dp_list:
@@ -397,7 +437,7 @@ def check_work_pressure(value, tip_widget, param_name, column_name, table_widget
 
     if diff_val is not None:
         if wp < diff_val:
-            return "error", "工作压力不应低于进、出口压力差，请核对后输入"
+            return "error", "工作压力不应低于隔板两侧压力差值，请核对后输入"
 
     return "ok", ""
 
@@ -1168,7 +1208,7 @@ def check_design_temp_min(value, tip_widget, param_name, column_name, table_widg
     return "ok", ""
 def check_in_out_pressure_gap(value, tip_widget, param_name, column_name, table_widget, col_index) -> Tuple[str, str]:
     """
-    校验“进、出口压力差”：
+    校验“隔板两侧压力差值*（可取隔板两侧计算压降2倍）”：
     1. 类型 float；
     2. 值必须 ≥ 0；
     3. 不得高于当前壳程/管程的“工作压力”
@@ -1190,20 +1230,19 @@ def check_in_out_pressure_gap(value, tip_widget, param_name, column_name, table_
 
     work_pressure = None
     for row in range(table_widget.rowCount()):
-        param_item = table_widget.item(row, 1)
-        if not param_item:
+        name = get_param_name(table_widget, row)
+        if name != "工作压力":
             continue
-        if param_item.text().strip() == "工作压力":
-            val_item = table_widget.item(row, col_index)
-            if val_item and val_item.text().strip():
-                try:
-                    work_pressure = float(val_item.text())
-                    break
-                except:
-                    pass
+        val_item = table_widget.item(row, col_index)
+        if val_item and val_item.text().strip():
+            try:
+                work_pressure = float(val_item.text())
+                break
+            except:
+                pass
 
     if work_pressure is not None and diff_val > work_pressure:
-        return "error", "进、出口压力差不应高于工作压力，请核对后输入"
+        return "error", "隔板两侧压力差值不应高于工作压力，请核对后输入"
 
     return "ok", ""
 

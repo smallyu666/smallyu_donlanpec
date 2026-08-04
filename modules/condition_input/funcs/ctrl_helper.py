@@ -160,8 +160,9 @@ class UndoableItemDelegate(QStyledItemDelegate):
                 param_name = vh_item.text().strip()
             else:
                 # fallback: 如果没有行头，就用第1列（主界面）
+                from modules.condition_input.funcs.funcs_def_check import param_name_from_item
                 param_item = self.table.item(row, 1)
-                param_name = param_item.text().strip() if param_item else ""
+                param_name = param_name_from_item(param_item)
 
             value = value.strip()
 
@@ -270,7 +271,8 @@ class SmartDelegate(QStyledItemDelegate):
     def _get_delegate(self, index):
         try:
             param_item = self.table.item(index.row(), 1)
-            param_name = param_item.text().strip() if param_item else ""
+            from modules.condition_input.funcs.funcs_def_check import param_name_from_item
+            param_name = param_name_from_item(param_item)
 
             # ✅ 限定只在“参数值列”才显示下拉框（如设计数据第3、4列，通用数据第3列）
             allowed_columns = [3, 4] if self.mode == "design" else [3]
@@ -418,7 +420,8 @@ class TypeToStartEditFilter(QObject):
                 dd = getattr(self.smart_delegate, "dropdown_delegate", None)
                 if dd:
                     param_item = self.table.item(current.row(), 1)
-                    param_name = param_item.text().strip() if param_item else ""
+                    from modules.condition_input.funcs.funcs_def_check import param_name_from_item
+                    param_name = param_name_from_item(param_item)
                     conf = dd.config.get(param_name)
                     if conf and conf.get("type") == "single" and not conf.get("editable", False):
                         return False
@@ -631,7 +634,8 @@ def handle_paste(table, undo_stack, line_tip=None, viewer=None):
 
             # ✅ 提前缓存参数名和列名，避免 Qt 崩溃
             param_item = table.item(row, 1)
-            param_name = param_item.text().strip() if param_item else ""
+            from modules.condition_input.funcs.funcs_def_check import param_name_from_item
+            param_name = param_name_from_item(param_item)
 
             column_item = table.horizontalHeaderItem(col)
             column_name = column_item.text().strip() if column_item else ""

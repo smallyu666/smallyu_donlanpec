@@ -41,7 +41,11 @@ from modules.condition_input.funcs.funcs_def_check import check_dn, check_work_p
     check_in_out_pressure_gap, check_trail_stand_pressure_medium_density, check_insulation_layer_thickness, \
     check_insulation_material_density, check_def_trail_stand_pressure_lying, check_def_trail_stand_pressure_stand, \
     check_trail_stand_pressure_type, check_pressure_test_temp, check_avg_tube_metal_temp, check_avg_shell_metal_temp, \
-    check_container_outer_diameter, check_container_shell_length
+    check_container_outer_diameter, check_container_shell_length, \
+    PARAM_BAFFLE_SIDE_PRESSURE_DIFF, PARAM_BAFFLE_SIDE_PRESSURE_DIFF_BASE, \
+    PARAM_BAFFLE_SIDE_PRESSURE_DIFF_LEGACY, \
+    normalize_param_name, param_name_from_item, is_baffle_side_pressure_diff_param, \
+    is_baffle_side_pressure_diff_starred
 
 # ============================================================================
 # “所属元件开孔处焊接接头系数”——手动标志（内存态）
@@ -1104,6 +1108,8 @@ def _read_row_as_list(table_widget, row):
     values = []
     for c in range(cols):
         item = table_widget.item(row, c)
+        header_item = table_widget.horizontalHeaderItem(c)
+        header_text = header_item.text() if header_item else ""
         if item is None:
             values.append("")
         elif c == 0:
@@ -1112,6 +1118,9 @@ def _read_row_as_list(table_widget, row):
                 values.append(str(user_data))
             else:
                 values.append(item.text())
+        elif header_text == "参数名称":
+            # 存 canonical 单行名，避免把显示换行带进重排
+            values.append(param_name_from_item(item))
         else:
             values.append(item.text())
     return values
@@ -1137,6 +1146,10 @@ def _write_row_from_list(table_widget, row, values, header_userroles=None):
             item.setTextAlignment(Qt.AlignCenter)
         # 0522新修改-ui修改
         elif header_text == "参数名称":
+            canonical = normalize_param_name(val)
+            display = _format_design_param_name_display(canonical)
+            item.setText(display)
+            item.setData(Qt.UserRole, canonical)
             item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
             item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         elif header_text in ("规范/标准名称", "用途", "细类"):
@@ -1247,6 +1260,8 @@ def restore_default_order(table_widget):
     for r, row_vals in enumerate(new_rows):
         _write_row_from_list(table_widget, r, row_vals)
 
+    _fix_design_data_row_heights(table_widget)
+
     # 恢复刷新
     table_widget.setUpdatesEnabled(True)
     table_widget.viewport().update()
@@ -1289,7 +1304,7 @@ def apply_mode_param_order(table_widget, target_id_seq, prioritize_starred=False
             cur_ids.append(None)
         # 获取参数名称（第1列），用于判断是否为必填项（带*）
         name_item = table_widget.item(r, 1)
-        param_names.append(name_item.text().strip() if name_item else "")
+        param_names.append(param_name_from_item(name_item))
 
     id2rows = {}
     id_to_required = {}  # 记录每个ID对应的参数是否为必填项（带*）
@@ -1355,6 +1370,8 @@ def apply_mode_param_order(table_widget, target_id_seq, prioritize_starred=False
     table_widget.setRowCount(len(new_rows))
     for r, row_vals in enumerate(new_rows):
         _write_row_from_list(table_widget, r, row_vals)
+
+    _fix_design_data_row_heights(table_widget)
 
     # ✅ 恢复刷新（但不要恢复排序）
     table_widget.setUpdatesEnabled(True)
@@ -1824,6 +1841,18 @@ def _format_coating_usage_display(usage: str) -> str:
     return s
 
 
+def _format_design_param_name_display(name: str) -> str:
+    """
+    设计数据参数名称显示：隔板两侧压力差值* 从括号起换行；其余原样。
+    库内仍存单行 canonical 名（放 UserRole）。
+    例：隔板两侧压力差值*（可取…）→ 隔板两侧压力差值*\\n（可取…）
+    """
+    s = normalize_param_name(name)
+    if s != PARAM_BAFFLE_SIDE_PRESSURE_DIFF and not s.startswith(PARAM_BAFFLE_SIDE_PRESSURE_DIFF_BASE):
+        return s
+    return _format_coating_usage_display(s)
+
+
 def _coating_usage_original_from_item(item) -> str:
     """读取用途原始值（优先 UserRole，避免把显示用换行写回库）。"""
     if item is None:
@@ -2254,10 +2283,14 @@ def setup_condition_table_proportional_layout(viewer, table_name: str) -> None:
     v_layout.addWidget(host)
 
     table.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
-    # 涂漆表用途列需括号换行；其它表单行省略
+    # 涂漆用途列需括号换行；设计数据仅「隔板两侧压力差值」含显式 \\n，其余行保持单行省略
     if table_name == "tableWidget_coating_data":
         table.setWordWrap(True)
         table.setTextElideMode(Qt.ElideNone)
+    elif table_name == "tableWidget_design_data":
+        # 允许参数名单元格中的显式换行显示；行高由 _fix_design_data_row_heights 单独控制
+        table.setWordWrap(True)
+        table.setTextElideMode(Qt.ElideRight)
     else:
         table.setWordWrap(False)
         table.setTextElideMode(Qt.ElideRight)
@@ -2272,20 +2305,41 @@ def apply_condition_table_cell_tooltips(table_widget) -> None:
     if table_widget is None:
         return
     is_coating = table_widget.objectName() == "tableWidget_coating_data"
+    is_design = table_widget.objectName() == "tableWidget_design_data"
     for row in range(table_widget.rowCount()):
         for col in range(table_widget.columnCount()):
             item = table_widget.item(row, col)
             if item is None:
                 continue
-            # 涂漆用途列：tooltip 用原始单行文案
+            # 涂漆用途列 / 设计数据参数名称：tooltip 用原始单行文案
             if is_coating and col == 0 and row >= 2:
                 text = _coating_usage_original_from_item(item)
+            elif is_design and col == 1:
+                text = param_name_from_item(item)
             else:
                 text = item.text()
             item.setToolTip(text if text else "")
             widget = table_widget.cellWidget(row, col)
             if widget is not None and hasattr(widget, "setToolTip"):
                 widget.setToolTip(text if text else "")
+
+
+def _fix_design_data_row_heights(table_widget) -> None:
+    """
+    设计数据表行高：默认单行高度；仅参数名称含显式换行（隔板两侧压力差值）的行按内容加高。
+    避免整表 wordWrap 导致其它长参数名被自动撑高。
+    """
+    if table_widget is None or table_widget.objectName() != "tableWidget_design_data":
+        return
+    default_h = table_widget.verticalHeader().defaultSectionSize()
+    if default_h <= 0:
+        default_h = 30
+    for r in range(table_widget.rowCount()):
+        name_item = table_widget.item(r, 1)
+        if name_item and "\n" in (name_item.text() or ""):
+            table_widget.resizeRowToContents(r)
+        else:
+            table_widget.setRowHeight(r, default_h)
 
 
 def _condition_table_available_content_width(table) -> int:
@@ -2410,6 +2464,8 @@ def refresh_condition_table_proportional_layout(viewer, table_name: str, force: 
     header.setStretchLastSection(False)
     apply_condition_table_column_proportions(viewer, table_name)
     apply_condition_table_cell_tooltips(table)
+    if table_name == "tableWidget_design_data":
+        _fix_design_data_row_heights(table)
 
 
 def refresh_all_condition_tables_proportional_layout(viewer, force: bool = False) -> None:
@@ -2572,6 +2628,9 @@ def get_table_data(table_widget):
                 if col_index == 0 and table_widget.horizontalHeaderItem(0) and table_widget.horizontalHeaderItem(0).text() == "序号":
                     user_data = item.data(Qt.UserRole)
                     value = str(user_data) if user_data is not None else item.text()
+                elif header == "参数名称":
+                    # 优先 UserRole（canonical 单行），避免把显示换行写回库
+                    value = param_name_from_item(item)
                 else:
                     value = item.text()
             else:
@@ -3588,7 +3647,7 @@ def validate_required_fields(table_widget, mode="设计数据"):
     检查带星号的“参数名称”对应的必填字段是否为空
     - mode="设计数据"：要求壳程数值、管程数值必须填写（容器仅壳程/数值列）
     - mode="通用数据"：要求参数值必须填写
-    - 特殊强制：进、出口压力差 的管程数值为必填
+    - 特殊强制：隔板两侧压力差值* 的管程数值为必填
     """
     header_map = get_header_column_map(table_widget)
     viewer = getattr(table_widget, "viewer", None)
@@ -3615,12 +3674,12 @@ def validate_required_fields(table_widget, mode="设计数据"):
         name_item = table_widget.item(row, name_col)
         if not name_item:
             continue
-        name_text = name_item.text().strip()
+        name_text = param_name_from_item(name_item)
 
         # ✅ 常规：带 * 的参数检查 修改！！！！
         if "*" in name_text:
-            # 特殊项：进、出口压力差* 只检查管程数值
-            if name_text == "进、出口压力差*":
+            # 特殊项：隔板两侧压力差值* / 旧名进、出口压力差* 只检查管程数值
+            if is_baffle_side_pressure_diff_starred(name_text):
                 col = header_map.get("管程数值")
                 if col is not None:
                     val_item = table_widget.item(row, col)
@@ -3632,14 +3691,6 @@ def validate_required_fields(table_widget, mode="设计数据"):
                     if not val_item or not val_item.text().strip():
                         missing_rows.append((row, name_text))
                         break
-
-        # ✅ 强制补充项：进、出口压力差 的“管程数值”必须填写
-        if mode == "设计数据" and not is_container and name_text == "进、出口压力差":
-            col = header_map.get("管程数值")
-            if col is not None:
-                val_item = table_widget.item(row, col)
-                if not val_item or not val_item.text().strip():
-                    missing_rows.append((row, name_text + "（管程）"))
 
     return len(missing_rows) > 0, missing_rows
 
@@ -3693,7 +3744,7 @@ def validate_design_table_cell(param_name: str, column_name: str, value: str, li
     - 返回值：校验结果等级 "ok" / "warn" / "error"
     """
 
-    param_name = param_name.strip()
+    param_name = normalize_param_name(param_name)
     column_name = normalize_design_column_name(column_name.strip())
     key = (param_name, column_name)
 
@@ -3725,8 +3776,10 @@ def validate_design_table_cell(param_name: str, column_name: str, value: str, li
             ("设计温度（最高）*", "管程数值"): check_design_temp_max,
             ("最低设计温度", "壳程数值"): check_design_temp_min,
             ("最低设计温度", "管程数值"): check_design_temp_min,
-            ("进、出口压力差*", "壳程数值"): check_in_out_pressure_gap,
-            ("进、出口压力差*", "管程数值"): check_in_out_pressure_gap,
+            (PARAM_BAFFLE_SIDE_PRESSURE_DIFF, "壳程数值"): check_in_out_pressure_gap,
+            (PARAM_BAFFLE_SIDE_PRESSURE_DIFF, "管程数值"): check_in_out_pressure_gap,
+            (PARAM_BAFFLE_SIDE_PRESSURE_DIFF_LEGACY, "壳程数值"): check_in_out_pressure_gap,
+            (PARAM_BAFFLE_SIDE_PRESSURE_DIFF_LEGACY, "管程数值"): check_in_out_pressure_gap,
             ("自定义耐压试验压力（卧）", "壳程数值"): check_def_trail_stand_pressure_lying,
             ("自定义耐压试验压力（卧）", "管程数值"): check_def_trail_stand_pressure_lying,
             ("自定义耐压试验压力（立）", "壳程数值"): check_def_trail_stand_pressure_stand,
@@ -4368,6 +4421,10 @@ def fill_table_widget_export(table_widget, headers, rows, index_header=None):
             is_unit_column = key == "参数单位"
             # 0522新修改-ui修改
             if key == "参数名称":
+                canonical = normalize_param_name(value)
+                display = _format_design_param_name_display(canonical)
+                item.setText(display)
+                item.setData(Qt.UserRole, canonical)
                 item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
                 item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
             elif is_name_column:
