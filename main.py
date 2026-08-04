@@ -470,7 +470,7 @@ class UserPage(QWidget):
 
 from modules.chanpinguanli.chanpinguanli_main import product_manager
 from modules.chanpinguanli.common_usage import get_mysql_connection_product, get_mysql_connection_active
-from modules.chanpinguanli.project_confirm_btn import show_confirm_dialog
+from modules.chanpinguanli.project_confirm_btn import apply_msgbox_button_style, show_confirm_dialog
 
 
 def on_product_id_changed(new_id):
@@ -2442,6 +2442,7 @@ if __name__ == "__main__":
                 ok_btn = box.button(QtWidgets.QMessageBox.Ok)
                 if ok_btn is not None:
                     ok_btn.setText("确认")
+                apply_msgbox_button_style(box)
                 return box.exec_()
             else:
                 return _orig_information(parent, title, text, buttons, defaultButton)
@@ -2459,6 +2460,7 @@ if __name__ == "__main__":
                 ok_btn = box.button(QtWidgets.QMessageBox.Ok)
                 if ok_btn is not None:
                     ok_btn.setText("确认")
+                apply_msgbox_button_style(box)
                 return box.exec_()
             else:
                 return _orig_critical(parent, title, text, buttons, defaultButton)
@@ -2476,6 +2478,7 @@ if __name__ == "__main__":
                 ok_btn = box.button(QtWidgets.QMessageBox.Ok)
                 if ok_btn is not None:
                     ok_btn.setText("确认")
+                apply_msgbox_button_style(box)
                 return box.exec_()
             else:
                 return _orig_warning(parent, title, text, buttons, defaultButton)
@@ -2503,6 +2506,7 @@ if __name__ == "__main__":
                 btn = box.button(std_btn)
                 if btn is not None:
                     btn.setText(label)
+            apply_msgbox_button_style(box)
             return box.exec_()
 
 
