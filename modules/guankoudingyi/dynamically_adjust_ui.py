@@ -1,19 +1,22 @@
 import os
 
-from PyQt5.QtCore import Qt, QObject, QEvent, QItemSelectionModel, QTimer
+from PyQt5.QtCore import Qt, QObject, QEvent, QItemSelection, QItemSelectionModel, QTimer
 
-from PyQt5 import QtWidgets, uic
+from PyQt5 import QtWidgets, uic, sip
 from PyQt5.QtWidgets import (
     QTableWidgetItem, QComboBox, QLabel,
     QVBoxLayout, QWidget, QMessageBox, QHeaderView, QTableWidget, QTableView,
     QAbstractItemView, QApplication, QAbstractItemDelegate,
 )
-from PyQt5.QtGui import QBrush, QColor
+from PyQt5.QtGui import QBrush, QColor, QIcon, QPixmap, QTransform
 from pandas.core.interchange import column
 
 from modules.chanpinguanli.chanpinguanli_main import product_manager
 from modules.condition_input.view import check_project_and_product
-from modules.guankoudingyi.funcs.funcs_pipe_data_in_out import export_nozzle_listing
+from modules.guankoudingyi.funcs.funcs_pipe_data_in_out import (
+    export_nozzle_listing,
+    export_nozzle_define_sheet,
+)
 from modules.guankoudingyi.funcs.pipe_get_units_types import get_current_unit_types_from_ui
 #导入函数功能
 from modules.guankoudingyi.obtain_product_type_version import get_product_type_and_version
@@ -32,6 +35,7 @@ from modules.guankoudingyi.funcs.funcs_pipe_table import (
     copy_attachment_data,
     get_pipe_col,
     get_pipe_special_columns,
+    show_styled_message,
 )
 from modules.guankoudingyi.funcs.funcs_pipe_comboBox_units import setup_unit_selection_handlers, load_nps_to_dn_map
 from modules.guankoudingyi.funcs.funcs_pipe_comboBox_value import (
@@ -39,18 +43,26 @@ from modules.guankoudingyi.funcs.funcs_pipe_comboBox_value import (
     handle_pipe_cell_changed,
     initialize_pipe_combobox_delegates,
     NoWheelComboBox,
+    PipeComboArrowMouseFilter,
+    _is_pipe_editable_combo_column,
+    _pipe_dropdown_columns,
 )
 from modules.guankoudingyi.funcs.funcs_attachment_comboBox_value import (
     handle_attachment_cell_click as handle_attachment_table_dropdown_click,
     handle_attachment_cell_changed,
     initialize_attachment_combobox_delegates,
     connect_attachment_component_picture_buttons,
+    AttachmentComboArrowMouseFilter,
+    _attachment_cell_is_editable,
+    _attachment_dropdown_columns,
+    _is_attachment_editable_combo_column,
 )
 # 导入表头排序功能
 from modules.guankoudingyi.funcs.funcs_pipe_sort import setup_header_click_sort, show_head_menu
 # 导入确认按钮功能
 from modules.guankoudingyi.funcs.funs_enter_key import connect_save_button
 from modules.guankoudingyi.view_drawing.main_view import embed_heat_exchanger_view, HeatExchangerView
+from modules.guankoudingyi.view_drawing.smooth_resizable_view import install_pipe_definition_resizable_view
 #导入管口复制功能
 from modules.guankoudingyi.funcs.funcs_pipe_table import copy_pipe_data
 #管口批量导入功能
@@ -84,39 +96,83 @@ def get_pipe_position_subheaders(is_container):
     return headers
 
 
+# 二级表头显示换行（逻辑名不变，仅界面展示）
+PIPE_HEADER_DISPLAY_LINES = {
+    "密封面型式": "密封面\n型式",
+    "管口所属元件": "管口所属\n元件",
+    "轴向定位基准": "轴向定位\n基准",
+    "轴向定位距离": "轴向定位\n距离",
+}
+
 def get_pipe_min_column_widths(is_container):
     widths = {
-        0: 70,   # 序号
+        0: 80,   # 序号
         1: 110,  # 管口代号
         2: 165,  # 管口功能
         3: 165,  # 管口用途
         4: 110,  # 公称尺寸
-        5: 240,  # 法兰标准
+        5: 250,  # 法兰标准
         6: 130,  # 压力等级
-        7: 130,  # 法兰型式
-        8: 130,  # 密封面型式
+        7: 125,  # 法兰型式
+        8: 110,  # 密封面型式
         9: 160,  # 焊端规格
-        10: 175,  # 管口所属元件
-        11: 160,  # 轴向定位基准
-        12: 160,  # 轴向定位距离
-        13: 140,  # 轴向夹角(°)
-        14: 140,  # 周向方位(°)
-        15: 140,  # 偏心距(mm)
-        16: 160,  # 外伸高度
+        10: 160,  # 管口所属元件
+        11: 140,  # 轴向定位基准
+        12: 140,  # 轴向定位距离
+        13: 135,  # 轴向夹角(°)
+        14: 135,  # 周向方位(°)
+        15: 135,  # 偏心距(mm)
+        16: 140,  # 外伸高度
     }
     if is_container:
         widths[17] = 160  # 内伸高度
-        widths[18] = 190  # 管口附件
+        widths[18] = 180  # 管口附件
         widths[19] = 110  # 管口载荷
     else:
-        widths[17] = 190  # 管口附件
+        widths[17] = 180  # 管口附件
         widths[18] = 110  # 管口载荷
     return widths
 
 
+def get_pipe_last_row_frozen_edit_columns(is_container):
+    """
+    最后一行占位行、管口代号未填时：禁止编辑、且不进入选区的列。
+    仍可设为当前格（虚线焦点框）；仅管口代号(1)可选中并编辑。
+    """
+    col_count = 20 if is_container else 19
+    return set(range(col_count)) - {1}
+
+
+# 兼容旧名
 def get_pipe_last_row_editable_columns(is_container):
-    """最后一行占位行禁止编辑/选中的列（有管口代号前）。"""
-    return set(range(4, 20 if is_container else 19))
+    return get_pipe_last_row_frozen_edit_columns(is_container)
+
+
+def _pipe_last_row_no_code(stats_widget, table=None):
+    """最后一行是否尚无管口代号。"""
+    table = table or getattr(stats_widget, "tableWidget_pipe", None)
+    if table is None or table.rowCount() <= 0:
+        return False
+    last_row = table.rowCount() - 1
+    code_item = table.item(last_row, 1)
+    return not (code_item and code_item.text().strip())
+
+
+def _pipe_set_last_row_focus_only(table, row, column):
+    """最后一行禁选列：只设当前格焦点，不写入选区。"""
+    model = table.model()
+    sel = table.selectionModel()
+    if model is None or sel is None:
+        return
+    index = model.index(row, column)
+    if not index.isValid():
+        return
+    sel.setCurrentIndex(index, QItemSelectionModel.NoUpdate)
+    # 若已误入选区则剔除
+    try:
+        sel.select(index, QItemSelectionModel.Deselect)
+    except Exception:
+        pass
 
 
 # === 管口表 Enter：下一行 + 按列类型自动进入编辑 ===
@@ -125,12 +181,101 @@ def _pipe_table_focused(table, widget=None):
     return fw is not None and (fw is table or table.isAncestorOf(fw))
 
 
-def _pipe_combo_popup_open(table):
-    for combo in table.findChildren(QComboBox):
-        view = combo.view()
-        if view and view.isVisible():
-            return True
-    return False
+def _pipe_combo_popup_open(table, stats_widget=None):
+    return _find_open_pipe_combo(table, stats_widget) is not None
+
+
+def _find_open_pipe_combo(table, stats_widget=None):
+    """返回当前已展开下拉的 QComboBox；没有则 None。"""
+    views = [table]
+    if stats_widget is not None:
+        frozen = _pipe_frozen_data_view(stats_widget)
+        if frozen is not None:
+            views.append(frozen)
+    for view in views:
+        for combo in view.findChildren(QComboBox):
+            popup = combo.view()
+            if popup and popup.isVisible():
+                return combo
+    return None
+
+
+def _find_active_pipe_combo_editor(table, stats_widget=None):
+    """
+    返回当前编辑中的 QComboBox（含未展开的可编辑下拉）。
+    优先已展开列表；否则按焦点 / lineEdit / indexWidget 查找。
+    """
+    open_combo = _find_open_pipe_combo(table, stats_widget)
+    if open_combo is not None:
+        return open_combo
+
+    views = [table]
+    if stats_widget is not None:
+        frozen = _pipe_frozen_data_view(stats_widget)
+        if frozen is not None:
+            views.append(frozen)
+
+    for view in views:
+        for combo in view.findChildren(QComboBox):
+            try:
+                if combo.hasFocus():
+                    return combo
+                if combo.isEditable():
+                    line_edit = combo.lineEdit()
+                    if line_edit is not None and line_edit.hasFocus():
+                        return combo
+            except RuntimeError:
+                continue
+        try:
+            idx = view.currentIndex()
+            if idx.isValid():
+                widget = view.indexWidget(idx)
+                if isinstance(widget, QComboBox):
+                    return widget
+        except RuntimeError:
+            pass
+
+    fw = QApplication.focusWidget()
+    w = fw
+    while w is not None:
+        if isinstance(w, QComboBox):
+            return w
+        try:
+            w = w.parentWidget()
+        except RuntimeError:
+            break
+    return None
+
+
+def _commit_editable_combo_keeping_typed_text(combo):
+    """
+    可编辑下拉展开时：关闭列表并保留 lineEdit 手输内容，
+    避免 Enter 被当成「选中高亮项」覆盖手输。
+    """
+    typed = None
+    try:
+        if combo.isEditable():
+            line_edit = combo.lineEdit()
+            if line_edit is not None:
+                typed = line_edit.text()
+            else:
+                typed = combo.currentText()
+    except RuntimeError:
+        typed = None
+    try:
+        combo.hidePopup()
+    except Exception:
+        pass
+    if typed is not None:
+        try:
+            # hidePopup 后可能被高亮项改写，强制写回手输
+            if combo.isEditable() and combo.lineEdit() is not None:
+                combo.lineEdit().setText(typed)
+            combo.setEditText(typed)
+            combo.setCurrentText(typed)
+        except RuntimeError:
+            pass
+    return typed
 
 
 def _is_pipe_cell_editable(table, stats_widget, row, col):
@@ -139,7 +284,7 @@ def _is_pipe_cell_editable(table, stats_widget, row, col):
     if row == table.rowCount() - 1:
         code_item = table.item(row, 1)
         has_code = code_item.text().strip() != "" if code_item else False
-        if not has_code and col in get_pipe_last_row_editable_columns(
+        if not has_code and col in get_pipe_last_row_frozen_edit_columns(
                 getattr(stats_widget, 'is_container_product', False)):
             return False
     item = table.item(row, col)
@@ -147,6 +292,71 @@ def _is_pipe_cell_editable(table, stats_widget, row, col):
         return False
     flags = item.flags()
     return bool(flags & Qt.ItemIsEnabled and flags & Qt.ItemIsEditable)
+
+
+def _pipe_frozen_data_view(stats_widget):
+    """左侧冻结数据视图（盖住序号/管口代号列）。"""
+    return getattr(stats_widget, "tableWidget_pipe_frozen", None)
+
+
+def _pipe_frozen_edit_columns(stats_widget):
+    """需在冻结视图上打开编辑器的列（默认序号、管口代号）。"""
+    cols = getattr(stats_widget, "pipe_frozen_columns", None)
+    return cols if cols is not None else (0, 1)
+
+
+def _pipe_active_edit_view(table, stats_widget):
+    """当前处于编辑态的视图：冻结列编辑时为 frozen，否则为主表。"""
+    frozen = _pipe_frozen_data_view(stats_widget)
+    if frozen is not None and frozen.state() == QAbstractItemView.EditingState:
+        return frozen
+    return table
+
+
+def _pipe_is_editing(table, stats_widget):
+    if table.state() == QAbstractItemView.EditingState:
+        return True
+    frozen = _pipe_frozen_data_view(stats_widget)
+    return bool(frozen is not None and frozen.state() == QAbstractItemView.EditingState)
+
+
+def _edit_pipe_cell(table, stats_widget, row, col):
+    """
+    打开单元格编辑器。
+    冻结列（序号/管口代号）必须在冻结视图上 edit，否则编辑器开在主表会被叠层挡住。
+    """
+    item = table.item(row, col)
+    if not item:
+        return
+
+    # 轴向夹角/周向方位/偏心距：进入编辑前快照多选行，避免 edit 收成单格丢失批量状态
+    if col in (13, 14, 15):
+        bulk_col = getattr(stats_widget, "bulk_assign_target_column", None)
+        bulk_rows = list(getattr(stats_widget, "bulk_assign_rows", []) or [])
+        if bulk_col == col and len(bulk_rows) > 1:
+            stats_widget._bulk_assign_rows_snapshot = bulk_rows
+            stats_widget._pipe_bulk_edit_active = True
+            try:
+                table.setProperty("pipe_bulk_edit_active", True)
+            except Exception:
+                pass
+            if not hasattr(stats_widget, "original_cell_value_map"):
+                stats_widget.original_cell_value_map = {}
+            for r in bulk_rows:
+                cell = table.item(r, col)
+                stats_widget.original_cell_value_map[(r, col)] = (
+                    cell.text().strip() if cell else ""
+                )
+
+    if col in _pipe_frozen_edit_columns(stats_widget):
+        frozen = _pipe_frozen_data_view(stats_widget)
+        if frozen is not None:
+            index = table.model().index(row, col)
+            if index.isValid():
+                frozen.setFocus(Qt.OtherFocusReason)
+                frozen.edit(index)
+                return
+    table.editItem(item)
 
 
 class ReturnKeyJumpFilter(QObject):
@@ -157,41 +367,137 @@ class ReturnKeyJumpFilter(QObject):
         self.table = table
         self.stats_widget = stats_widget
         self._pending_nav = None
+        self._staying_on_cell = False
+        if not hasattr(stats_widget, "_pipe_enter_nav_gen"):
+            stats_widget._pipe_enter_nav_gen = 0
+        if not hasattr(stats_widget, "_pipe_enter_nav_outcome"):
+            stats_widget._pipe_enter_nav_outcome = None
+        # 供警告弹窗关闭后结算跳行
+        stats_widget._pipe_enter_nav_settler = self._settle_after_warning
+        sel = table.selectionModel()
+        if sel is not None:
+            sel.currentChanged.connect(self._on_current_cell_changed)
         app = QApplication.instance()
         if app:
             app.installEventFilter(self)
 
+    def cleanup(self):
+        """界面关闭时从 QApplication 卸下过滤器，避免悬空回调崩溃。"""
+        try:
+            sw = self.stats_widget
+            if sw is not None:
+                # 作废已排队的 Enter 跳行回调
+                sw._pipe_enter_nav_gen = getattr(sw, "_pipe_enter_nav_gen", 0) + 1
+                if getattr(sw, "_pipe_enter_nav_settler", None) is self._settle_after_warning:
+                    sw._pipe_enter_nav_settler = None
+        except RuntimeError:
+            pass
+        try:
+            sel = self.table.selectionModel() if self.table is not None else None
+            if sel is not None:
+                try:
+                    sel.currentChanged.disconnect(self._on_current_cell_changed)
+                except (TypeError, RuntimeError):
+                    pass
+        except RuntimeError:
+            pass
+        app = QApplication.instance()
+        if app:
+            try:
+                app.removeEventFilter(self)
+            except RuntimeError:
+                pass
+        self.stats_widget = None
+
+    def _current_enter_nav_gen(self):
+        sw = self.stats_widget
+        if sw is None:
+            return -1
+        return getattr(sw, "_pipe_enter_nav_gen", 0)
+
+    def _bump_enter_nav_gen(self):
+        """作废已排队的 finish/跳行回调。"""
+        sw = self.stats_widget
+        if sw is None:
+            return -1
+        sw._pipe_enter_nav_gen = getattr(sw, "_pipe_enter_nav_gen", 0) + 1
+        return sw._pipe_enter_nav_gen
+
+    def _clear_enter_nav_outcome(self):
+        self.stats_widget._pipe_enter_nav_outcome = None
+
+    def _enter_nav_outcome_is_fail(self):
+        return getattr(self.stats_widget, "_pipe_enter_nav_outcome", None) == "fail"
+
+    def _on_current_cell_changed(self, current, previous):
+        """用户点选其它格时清掉失败拦截，避免卡住后续 Enter。"""
+        if self._staying_on_cell:
+            return
+        if self._warning_blocks_navigation():
+            return
+        # 挂起 Enter 结算期间保留 fail 快照，避免焦点恢复把结果洗掉
+        if self._pending_nav or getattr(self.stats_widget, "_pipe_pending_enter_nav", None):
+            return
+        if not current.isValid():
+            return
+        if previous.isValid() and current.row() == previous.row() and current.column() == previous.column():
+            return
+        self.stats_widget._pipe_cell_validation_blocked = False
+        self._clear_enter_nav_outcome()
+
     def _in_pipe_table_enter_context(self):
-        """焦点在表格内，或表格处于单元格编辑态（含下拉 popup 场景）。"""
+        """焦点在表格内（含冻结列视图），或表格/冻结列处于单元格编辑态。"""
+        # 警告弹窗显示中：不抢 Enter，留给弹窗关闭按钮
+        if getattr(self.stats_widget, "_pipe_warning_dialog_depth", 0) > 0:
+            return False
         table = self.table
         fw = QApplication.focusWidget()
         if fw and (fw is table or table.isAncestorOf(fw)):
             return True
-        if table.state() == QAbstractItemView.EditingState:
+        frozen = _pipe_frozen_data_view(self.stats_widget)
+        if fw and frozen is not None and (fw is frozen or frozen.isAncestorOf(fw)):
+            return True
+        # 下拉 popup 常为顶层窗口，焦点不在表格子树内，但仍属管口编辑
+        if _find_open_pipe_combo(table, self.stats_widget) is not None:
+            return True
+        if _pipe_is_editing(table, self.stats_widget):
             return table.currentIndex().isValid()
         return False
 
+    def _warning_blocks_navigation(self):
+        """警告已弹出或已预约延迟弹出：Enter 跳行挂起。"""
+        sw = self.stats_widget
+        return (
+            getattr(sw, "_pipe_warning_dialog_depth", 0) > 0
+            or getattr(sw, "_pipe_warning_pending", False)
+        )
+
     def _commit_and_close_editor(self, index):
-        """超时兜底：强制提交并关闭当前单元格编辑器。"""
+        """超时兜底：强制提交并关闭当前单元格编辑器（含冻结列视图）。"""
         table = self.table
+        edit_view = _pipe_active_edit_view(table, self.stats_widget)
         fw = QApplication.focusWidget()
-        if not fw or fw is table:
-            table.setFocus(Qt.OtherFocusReason)
+        if not fw or fw is table or fw is edit_view:
+            edit_view.setFocus(Qt.OtherFocusReason)
             return
-        for combo in table.findChildren(QComboBox):
+        for combo in edit_view.findChildren(QComboBox):
             try:
                 combo.hidePopup()
             except Exception:
                 pass
-        delegate = table.itemDelegate(index)
+        delegate = edit_view.itemDelegate(index)
         try:
             delegate.commitData.emit(fw)
             delegate.closeEditor.emit(fw, QAbstractItemDelegate.SubmitModelCache)
         except Exception:
-            table.setFocus(Qt.OtherFocusReason)
+            edit_view.setFocus(Qt.OtherFocusReason)
 
     def _validation_blocks_navigation(self):
-        """校验失败（红色提示）时，Enter 不跳下一行。"""
+        """校验失败时 Enter 不跳下一行：红字 tip、弹窗类拦截，或 fail 快照。"""
+        if self._enter_nav_outcome_is_fail():
+            return True
+        if getattr(self.stats_widget, "_pipe_cell_validation_blocked", False):
+            return True
         tip = getattr(self.stats_widget, 'line_tip', None)
         if not tip:
             return False
@@ -208,6 +514,18 @@ class ReturnKeyJumpFilter(QObject):
         table.setCurrentCell(row, col)
         if not _is_pipe_cell_editable(table, stats_widget, row, col):
             return
+        # 批量非法 tip：重进编辑时先强制回刷，并延后解除 sticky
+        sticky = getattr(stats_widget, "_pipe_sticky_error_tip", None)
+        if sticky:
+            try:
+                from modules.guankoudingyi.funcs.funcs_pipe_comboBox_value import (
+                    _force_pipe_error_tip,
+                    _release_pipe_sticky_error_tip_later,
+                )
+                _force_pipe_error_tip(stats_widget, sticky)
+                _release_pipe_sticky_error_tip_later(stats_widget, 150)
+            except Exception:
+                pass
         is_container = getattr(stats_widget, 'is_container_product', False)
         cols = get_pipe_special_columns(is_container)
         delegates = getattr(stats_widget, 'pipe_column_delegates', {})
@@ -217,44 +535,148 @@ class ReturnKeyJumpFilter(QObject):
             or col in (12, cols.get("extension_height"), cols.get("internal_height"), attachment_col)
         )
         if use_click_handler:
-            handle_pipe_cell_click(stats_widget, row, col)
+            # 校验失败重进编辑：视为强制打开下拉
+            handle_pipe_cell_click(stats_widget, row, col, force_open=True)
             return
-        item = table.item(row, col)
-        if item:
-            table.editItem(item)
+        _edit_pipe_cell(table, stats_widget, row, col)
 
-    def _finish_navigate_after_commit(self, from_row, col):
-        """编辑提交且 cellChanged 校验完成后，再决定是否跳行。"""
+    def _stay_on_cell(self, from_row, col):
+        """校验失败：停在原格；保留 blocked，留给晚到的 finish 继续拦截。"""
+        self._staying_on_cell = True
+        try:
+            self.table.setCurrentCell(from_row, col)
+        finally:
+            self._staying_on_cell = False
+
+    def _settle_after_warning(self):
+        """警告弹窗关闭后：按校验结果快照停留或跳行。"""
+        nav = getattr(self.stats_widget, "_pipe_pending_enter_nav", None) or self._pending_nav
+        if not nav:
+            # 无挂起跳行：保留 blocked/outcome，避免晚到的 finish 当成成功跳行
+            return
+        from_row, col = nav
         self._pending_nav = None
-        if self._validation_blocks_navigation():
-            self._reedit_cell(from_row, col)
+        self.stats_widget._pipe_pending_enter_nav = None
+        outcome = getattr(self.stats_widget, "_pipe_enter_nav_outcome", None)
+        self._clear_enter_nav_outcome()
+        # 优先认快照；无快照时回退到 blocked/红字 tip
+        if outcome == "fail" or (outcome is None and self._validation_blocks_navigation()):
+            self._bump_enter_nav_gen()
+            self._stay_on_cell(from_row, col)
             return
         self._navigate_to_next_row(from_row, col)
 
-    def _defer_navigate_after_commit(self, from_row, col, attempt=0):
+    def _finish_navigate_after_commit(self, from_row, col, pass_idx=0, gen=None):
+        """编辑提交且 cellChanged 校验完成后，再决定是否跳行。"""
+        if gen is None:
+            gen = self._current_enter_nav_gen()
+        if gen != self._current_enter_nav_gen():
+            return
+
+        self._pending_nav = (from_row, col)
+        self.stats_widget._pipe_pending_enter_nav = (from_row, col)
+
+        # 多等一帧：保证 cellChanged 里 deferred 警告有机会置 _pipe_warning_pending
+        if pass_idx < 1:
+            QTimer.singleShot(
+                0, lambda: self._finish_navigate_after_commit(from_row, col, 1, gen)
+            )
+            return
+
+        if gen != self._current_enter_nav_gen():
+            return
+
+        # 警告显示中或已预约延迟弹窗：挂起跳行，等弹窗关闭后结算
+        if self._warning_blocks_navigation():
+            if self._validation_blocks_navigation():
+                self.stats_widget._pipe_enter_nav_outcome = "fail"
+            return
+
+        if self._validation_blocks_navigation():
+            # 先区分弹窗类 / 红字 tip，再写入 fail 快照（避免 outcome 盖住分支判断）
+            dialog_style_fail = (
+                getattr(self.stats_widget, "_pipe_cell_validation_blocked", False)
+                or self._enter_nav_outcome_is_fail()
+            )
+            self._pending_nav = None
+            self.stats_widget._pipe_pending_enter_nav = None
+            self.stats_widget._pipe_enter_nav_outcome = "fail"
+            self._bump_enter_nav_gen()
+            # 弹窗类失败：只停原格；红字失败：回到原格并继续编辑
+            if dialog_style_fail:
+                self._stay_on_cell(from_row, col)
+            else:
+                self._reedit_cell(from_row, col)
+            return
+
+        self._pending_nav = None
+        self.stats_widget._pipe_pending_enter_nav = None
+        self._clear_enter_nav_outcome()
+        self._navigate_to_next_row(from_row, col)
+
+    def _defer_navigate_after_commit(self, from_row, col, attempt=0, gen=None):
         """等待编辑态结束后再跳转；超时则强制提交。"""
+        if gen is None:
+            gen = self._current_enter_nav_gen()
+        if gen != self._current_enter_nav_gen():
+            return
+
         max_attempts = 50
-        if self.table.state() == QAbstractItemView.EditingState:
+        if self._warning_blocks_navigation():
+            # 弹窗期间保留 pending，不强制 commit / 不跳行
+            self._pending_nav = (from_row, col)
+            self.stats_widget._pipe_pending_enter_nav = (from_row, col)
+            if self._validation_blocks_navigation():
+                self.stats_widget._pipe_enter_nav_outcome = "fail"
+            return
+        if _pipe_is_editing(self.table, self.stats_widget):
             if attempt >= max_attempts:
+                if (
+                    getattr(self.stats_widget, "_pipe_cell_validation_blocked", False)
+                    or self._enter_nav_outcome_is_fail()
+                ):
+                    self._pending_nav = None
+                    self.stats_widget._pipe_pending_enter_nav = None
+                    self.stats_widget._pipe_enter_nav_outcome = "fail"
+                    self._bump_enter_nav_gen()
+                    self._stay_on_cell(from_row, col)
+                    return
                 idx = self.table.model().index(from_row, col)
                 if idx.isValid():
                     self._commit_and_close_editor(idx)
-                QTimer.singleShot(0, lambda: self._finish_navigate_after_commit(from_row, col))
+                QTimer.singleShot(
+                    0, lambda: self._finish_navigate_after_commit(from_row, col, 0, gen)
+                )
                 return
             QTimer.singleShot(
                 10,
-                lambda: self._defer_navigate_after_commit(from_row, col, attempt + 1),
+                lambda: self._defer_navigate_after_commit(from_row, col, attempt + 1, gen),
             )
             return
         # 再等一帧，确保 cellChanged → handle_pipe_cell_changed 校验先完成
-        QTimer.singleShot(0, lambda: self._finish_navigate_after_commit(from_row, col))
+        QTimer.singleShot(
+            0, lambda: self._finish_navigate_after_commit(from_row, col, 0, gen)
+        )
 
     def _schedule_navigate(self, from_row, col):
+        # 仍处失败拦截且未开始新编辑：禁止再次跳行（空管口功能会被当成通过）
+        if (
+            getattr(self.stats_widget, "_pipe_cell_validation_blocked", False)
+            or self._enter_nav_outcome_is_fail()
+        ):
+            self._bump_enter_nav_gen()
+            self._pending_nav = None
+            self.stats_widget._pipe_pending_enter_nav = None
+            self.stats_widget._pipe_enter_nav_outcome = "fail"
+            self._stay_on_cell(from_row, col)
+            return
         nav = (from_row, col)
         if self._pending_nav == nav:
             return
         self._pending_nav = nav
-        self._defer_navigate_after_commit(from_row, col, 0)
+        self._clear_enter_nav_outcome()
+        gen = self._current_enter_nav_gen()
+        self._defer_navigate_after_commit(from_row, col, 0, gen)
 
     def _navigate_to_next_row(self, from_row, col):
         next_row = from_row + 1
@@ -287,14 +709,15 @@ class ReturnKeyJumpFilter(QObject):
         )
 
         if use_click_handler:
-            handle_pipe_cell_click(stats_widget, row, col)
+            # Enter 跳行进入下拉列：直接打开，不要求点箭头
+            handle_pipe_cell_click(stats_widget, row, col, force_open=True)
             return
 
-        item = table.item(row, col)
-        if item:
-            table.editItem(item)
+        _edit_pipe_cell(table, stats_widget, row, col)
 
     def eventFilter(self, obj, event):
+        if self.stats_widget is None:
+            return False
         if event.type() != QEvent.KeyPress or event.key() not in (Qt.Key_Return, Qt.Key_Enter):
             return super().eventFilter(obj, event)
 
@@ -303,18 +726,37 @@ class ReturnKeyJumpFilter(QObject):
 
         table = self.table
 
-        if table.state() == QAbstractItemView.EditingState:
+        if _pipe_is_editing(table, self.stats_widget):
             idx = table.currentIndex()
             if not idx.isValid():
                 return False
             from_row, col = idx.row(), idx.column()
 
-            # 下拉列表展开：先让 Enter 完成选项选中，再延迟跳行
-            if _pipe_combo_popup_open(table):
+            active_combo = _find_active_pipe_combo_editor(table, self.stats_widget)
+            if active_combo is not None:
+                # 可编辑下拉（含未展开）：Enter 提交手输/原值，不选中列表第一项
+                if active_combo.isEditable():
+                    _commit_editable_combo_keeping_typed_text(active_combo)
+                    edit_view = _pipe_active_edit_view(table, self.stats_widget)
+                    delegate = edit_view.itemDelegate(idx)
+                    try:
+                        delegate.commitData.emit(active_combo)
+                        delegate.closeEditor.emit(
+                            active_combo, QAbstractItemDelegate.SubmitModelCache
+                        )
+                    except Exception:
+                        try:
+                            edit_view.setFocus(Qt.OtherFocusReason)
+                        except Exception:
+                            pass
+                    self._schedule_navigate(from_row, col)
+                    return True  # 吞掉 Enter，禁止 ComboBox 激活高亮项
+
+                # 纯下拉：先让 Enter 完成选项选中，再延迟跳行
                 self._schedule_navigate(from_row, col)
                 return False
 
-            # 普通编辑 / 未展开的下拉：交给 Qt 正常提交，再延迟跳行
+            # 普通编辑：交给 Qt 正常提交，再延迟跳行
             self._schedule_navigate(from_row, col)
             return False
 
@@ -326,28 +768,549 @@ class ReturnKeyJumpFilter(QObject):
         return True
 
 
-# === 附件表专用：第0行为表头，回车不得在最后一行后跳到第0行（否则会选中表头，易引发异常/崩溃）===
-class AttachmentReturnKeyJumpFilter(QObject):
-    def __init__(self, table):
+class TabKeyJumpFilter(QObject):
+    """
+    管口表 Tab / Shift+Tab：
+    - 编辑中先提交再切到下一/上一列（避免 Combo/lineEdit 吞掉 Tab）
+    - 进入下拉列时走 handle_pipe_cell_click 灌选项，避免空下拉
+    """
+
+    def __init__(self, table, stats_widget):
         super().__init__(table)
         self.table = table
+        self.stats_widget = stats_widget
+        self._nav_gen = 0
+        # 禁用 Qt 默认 Tab 切格，改由本过滤器统一处理
+        try:
+            table.setTabKeyNavigation(False)
+        except Exception:
+            pass
+        app = QApplication.instance()
+        if app:
+            app.installEventFilter(self)
+
+    def cleanup(self):
+        self._nav_gen += 1
+        self.stats_widget = None
+        app = QApplication.instance()
+        if app:
+            try:
+                app.removeEventFilter(self)
+            except RuntimeError:
+                pass
+
+    def _in_pipe_table_tab_context(self):
+        sw = self.stats_widget
+        if sw is None:
+            return False
+        if getattr(sw, "_pipe_warning_dialog_depth", 0) > 0:
+            return False
+        if getattr(sw, "_pipe_closing", False):
+            return False
+        table = self.table
+        fw = QApplication.focusWidget()
+        if fw and (fw is table or table.isAncestorOf(fw)):
+            return True
+        frozen = _pipe_frozen_data_view(sw)
+        if fw and frozen is not None and (fw is frozen or frozen.isAncestorOf(fw)):
+            return True
+        if _find_open_pipe_combo(table, sw) is not None:
+            return True
+        if _pipe_is_editing(table, sw):
+            return table.currentIndex().isValid()
+        return False
+
+    def _commit_current_editor(self, index):
+        """提交并关闭当前编辑器（普通输入 / 下拉）。"""
+        table = self.table
+        sw = self.stats_widget
+        edit_view = _pipe_active_edit_view(table, sw)
+        active_combo = _find_active_pipe_combo_editor(table, sw)
+        if active_combo is not None:
+            if active_combo.isEditable():
+                _commit_editable_combo_keeping_typed_text(active_combo)
+            else:
+                try:
+                    active_combo.hidePopup()
+                except Exception:
+                    pass
+            delegate = edit_view.itemDelegate(index)
+            try:
+                delegate.commitData.emit(active_combo)
+                delegate.closeEditor.emit(
+                    active_combo, QAbstractItemDelegate.SubmitModelCache
+                )
+            except Exception:
+                try:
+                    edit_view.setFocus(Qt.OtherFocusReason)
+                except Exception:
+                    pass
+            return
+
+        fw = QApplication.focusWidget()
+        delegate = edit_view.itemDelegate(index)
+        editor = fw
+        while editor is not None and editor is not edit_view and editor is not table:
+            try:
+                delegate.commitData.emit(editor)
+                delegate.closeEditor.emit(
+                    editor, QAbstractItemDelegate.SubmitModelCache
+                )
+                return
+            except Exception:
+                editor = editor.parentWidget()
+        try:
+            edit_view.setFocus(Qt.OtherFocusReason)
+        except Exception:
+            pass
+
+    def _find_next_tab_cell(self, row, col, forward=True):
+        """下一/上一可落点格：跳过序号列；末行无代号时仅代号可编辑。"""
+        table = self.table
+        sw = self.stats_widget
+        nrows = table.rowCount()
+        ncols = table.columnCount()
+        if nrows <= 0 or ncols <= 1:
+            return row, col, False
+
+        r, c = row, col
+        step = 1 if forward else -1
+        for _ in range(nrows * ncols):
+            c += step
+            if forward:
+                if c >= ncols:
+                    c = 1  # 跳过序号列
+                    r += 1
+                    if r >= nrows:
+                        r = 0
+            else:
+                if c < 1:
+                    c = ncols - 1
+                    r -= 1
+                    if r < 0:
+                        r = nrows - 1
+
+            if c == 0:
+                continue
+
+            # 最后一行无管口代号：仅代号列可编，其它列只给焦点
+            if r == nrows - 1:
+                code_item = table.item(r, 1)
+                has_code = bool(code_item and code_item.text().strip())
+                if not has_code:
+                    if c == 1:
+                        return r, c, True
+                    return r, c, False
+
+            if _is_pipe_cell_editable(table, sw, r, c):
+                return r, c, True
+
+            # 不可编辑但可选中（如锁定「—」、载荷列）：仍可落焦点
+            item = table.item(r, c)
+            if item is not None and (item.flags() & Qt.ItemIsEnabled):
+                return r, c, False
+
+        return row, col, False
+
+    def _activate_cell_for_tab(self, row, col, can_edit):
+        table = self.table
+        sw = self.stats_widget
+        if not can_edit:
+            if row == table.rowCount() - 1:
+                code_item = table.item(row, 1)
+                if not (code_item and code_item.text().strip()) and col != 1:
+                    _pipe_set_last_row_focus_only(table, row, col)
+                    return
+            table.setCurrentCell(row, col)
+            return
+
+        table.setCurrentCell(row, col)
+
+        is_container = getattr(sw, "is_container_product", False)
+        cols = get_pipe_special_columns(is_container)
+        load_col = cols.get("load")
+        if col == load_col:
+            return
+
+        delegates = getattr(sw, "pipe_column_delegates", {})
+        attachment_col = cols.get("attachment")
+        use_click_handler = (
+            col in delegates
+            or col in _pipe_dropdown_columns(sw)
+            or col in (12, cols.get("extension_height"), cols.get("internal_height"), attachment_col)
+        )
+        if use_click_handler:
+            # 纯下拉：force_open 灌选项并打开；可编辑下拉：不展开，只进编辑（与空白单击一致）
+            force_open = not _is_pipe_editable_combo_column(sw, col)
+            handle_pipe_cell_click(sw, row, col, force_open=force_open)
+            return
+
+        _edit_pipe_cell(table, sw, row, col)
+
+    def _navigate(self, from_row, from_col, forward=True, gen=None):
+        if gen is None:
+            gen = self._nav_gen
+        if gen != self._nav_gen:
+            return
+        sw = self.stats_widget
+        if sw is None or getattr(sw, "_pipe_closing", False):
+            return
+        row, col, can_edit = self._find_next_tab_cell(from_row, from_col, forward=forward)
+        self._activate_cell_for_tab(row, col, can_edit)
+
+    def _schedule_navigate(self, from_row, from_col, forward=True):
+        self._nav_gen += 1
+        gen = self._nav_gen
+        QTimer.singleShot(0, lambda: self._navigate(from_row, from_col, forward, gen))
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Return, Qt.Key_Enter):
-            if self.table.state() == self.table.EditingState:
-                return False
-            current = self.table.currentIndex()
-            if not current.isValid():
-                return False
-            row, col = current.row(), current.column()
-            if row <= 0:
-                return False
-            next_row = row + 1
-            if next_row >= self.table.rowCount():
-                next_row = 1
-            self.table.setCurrentCell(next_row, col)
+        if self.stats_widget is None:
+            return False
+        if event.type() != QEvent.KeyPress:
+            return super().eventFilter(obj, event)
+
+        key = event.key()
+        if key not in (Qt.Key_Tab, Qt.Key_Backtab):
+            return super().eventFilter(obj, event)
+        if not self._in_pipe_table_tab_context():
+            return super().eventFilter(obj, event)
+
+        forward = key != Qt.Key_Backtab and not bool(event.modifiers() & Qt.ShiftModifier)
+        table = self.table
+        idx = table.currentIndex()
+        if not idx.isValid():
             return True
-        return super().eventFilter(obj, event)
+
+        from_row, from_col = idx.row(), idx.column()
+        if _pipe_is_editing(table, self.stats_widget) or _find_open_pipe_combo(table, self.stats_widget):
+            self._commit_current_editor(idx)
+            self._schedule_navigate(from_row, from_col, forward=forward)
+            return True
+
+        self._navigate(from_row, from_col, forward=forward)
+        return True
+
+
+# === 附件表：Enter 同列下一行（跳过表头；禁用列不进入编辑）===
+class AttachmentReturnKeyJumpFilter(QObject):
+    def __init__(self, table, stats_widget):
+        super().__init__(table)
+        self.table = table
+        self.stats_widget = stats_widget
+        self._nav_gen = 0
+        app = QApplication.instance()
+        if app:
+            app.installEventFilter(self)
+
+    def cleanup(self):
+        self._nav_gen += 1
+        self.stats_widget = None
+        app = QApplication.instance()
+        if app:
+            try:
+                app.removeEventFilter(self)
+            except RuntimeError:
+                pass
+
+    def _in_attachment_context(self):
+        sw = self.stats_widget
+        if sw is None or getattr(sw, "_pipe_closing", False):
+            return False
+        if getattr(sw, "_pipe_warning_dialog_depth", 0) > 0:
+            return False
+        table = self.table
+        fw = QApplication.focusWidget()
+        if fw and (fw is table or table.isAncestorOf(fw)):
+            return True
+        # 下拉展开时焦点可能在 popup
+        for combo in table.findChildren(QComboBox):
+            try:
+                popup = combo.view()
+                if popup and popup.isVisible():
+                    return True
+            except RuntimeError:
+                pass
+        return table.state() == QAbstractItemView.EditingState and table.currentIndex().isValid()
+
+    def _commit_editor(self, index):
+        table = self.table
+        open_combo = None
+        for combo in table.findChildren(QComboBox):
+            try:
+                if combo.view() and combo.view().isVisible():
+                    open_combo = combo
+                    break
+                if combo.hasFocus() or (
+                    combo.lineEdit() is not None and combo.lineEdit().hasFocus()
+                ):
+                    open_combo = combo
+                    break
+            except RuntimeError:
+                continue
+        if open_combo is not None:
+            try:
+                if open_combo.isEditable():
+                    _commit_editable_combo_keeping_typed_text(open_combo)
+                else:
+                    open_combo.hidePopup()
+            except Exception:
+                pass
+            delegate = table.itemDelegate(index)
+            try:
+                delegate.commitData.emit(open_combo)
+                delegate.closeEditor.emit(
+                    open_combo, QAbstractItemDelegate.SubmitModelCache
+                )
+            except Exception:
+                table.setFocus(Qt.OtherFocusReason)
+            return
+        fw = QApplication.focusWidget()
+        delegate = table.itemDelegate(index)
+        editor = fw
+        while editor is not None and editor is not table:
+            try:
+                delegate.commitData.emit(editor)
+                delegate.closeEditor.emit(
+                    editor, QAbstractItemDelegate.SubmitModelCache
+                )
+                return
+            except Exception:
+                editor = editor.parentWidget()
+        try:
+            table.setFocus(Qt.OtherFocusReason)
+        except Exception:
+            pass
+
+    def _activate_cell(self, row, col):
+        table = self.table
+        sw = self.stats_widget
+        if row <= 0:
+            row = 1
+        if row >= table.rowCount():
+            row = 1
+        table.setCurrentCell(row, col)
+        if _attachment_cell_is_editable(table, row, col):
+            handle_attachment_table_dropdown_click(sw, row, col, force_open=True)
+
+    def _navigate_next_row(self, from_row, col):
+        next_row = from_row + 1
+        if next_row >= self.table.rowCount():
+            next_row = 1
+        self._activate_cell(next_row, col)
+
+    def _schedule_navigate(self, from_row, col):
+        self._nav_gen += 1
+        gen = self._nav_gen
+        QTimer.singleShot(0, lambda: self._nav_if_gen(from_row, col, gen))
+
+    def _nav_if_gen(self, from_row, col, gen):
+        if gen != self._nav_gen or self.stats_widget is None:
+            return
+        self._navigate_next_row(from_row, col)
+
+    def eventFilter(self, obj, event):
+        if self.stats_widget is None:
+            return False
+        if event.type() != QEvent.KeyPress or event.key() not in (Qt.Key_Return, Qt.Key_Enter):
+            return super().eventFilter(obj, event)
+        if not self._in_attachment_context():
+            return super().eventFilter(obj, event)
+
+        table = self.table
+        idx = table.currentIndex()
+        if not idx.isValid() or idx.row() <= 0:
+            return True
+
+        from_row, col = idx.row(), idx.column()
+        if table.state() == QAbstractItemView.EditingState or any(
+            c.view() and c.view().isVisible() for c in table.findChildren(QComboBox)
+        ):
+            self._commit_editor(idx)
+            self._schedule_navigate(from_row, col)
+            return True
+
+        self._navigate_next_row(from_row, col)
+        return True
+
+
+# === 附件表：Tab / Shift+Tab 切列（跳过禁用的 4~12 列与序号列）===
+class AttachmentTabKeyJumpFilter(QObject):
+    def __init__(self, table, stats_widget):
+        super().__init__(table)
+        self.table = table
+        self.stats_widget = stats_widget
+        self._nav_gen = 0
+        try:
+            table.setTabKeyNavigation(False)
+        except Exception:
+            pass
+        app = QApplication.instance()
+        if app:
+            app.installEventFilter(self)
+
+    def cleanup(self):
+        self._nav_gen += 1
+        self.stats_widget = None
+        app = QApplication.instance()
+        if app:
+            try:
+                app.removeEventFilter(self)
+            except RuntimeError:
+                pass
+
+    def _in_attachment_context(self):
+        sw = self.stats_widget
+        if sw is None or getattr(sw, "_pipe_closing", False):
+            return False
+        if getattr(sw, "_pipe_warning_dialog_depth", 0) > 0:
+            return False
+        table = self.table
+        fw = QApplication.focusWidget()
+        if fw and (fw is table or table.isAncestorOf(fw)):
+            return True
+        for combo in table.findChildren(QComboBox):
+            try:
+                popup = combo.view()
+                if popup and popup.isVisible():
+                    return True
+            except RuntimeError:
+                pass
+        return table.state() == QAbstractItemView.EditingState and table.currentIndex().isValid()
+
+    def _tabable_columns(self, row):
+        """可选中或可编辑的列（不含序号）；禁用灰列自然不在其中。"""
+        table = self.table
+        cols = []
+        for c in range(1, table.columnCount()):
+            item = table.item(row, c)
+            if item is None:
+                continue
+            flags = item.flags()
+            if flags & Qt.ItemIsSelectable or flags & Qt.ItemIsEditable:
+                cols.append(c)
+        return cols if cols else [1, 2, 3]
+
+    def _find_next(self, row, col, forward=True):
+        table = self.table
+        nrows = table.rowCount()
+        if nrows <= 1:
+            return row, col
+        r, c = row, col
+        for _ in range(nrows * max(table.columnCount(), 1)):
+            tab_cols = self._tabable_columns(r)
+            if not tab_cols:
+                r = r + 1 if forward else r - 1
+                if r >= nrows:
+                    r = 1
+                if r <= 0:
+                    r = nrows - 1
+                continue
+            if c not in tab_cols:
+                c = tab_cols[0] if forward else tab_cols[-1]
+                return r, c
+            idx = tab_cols.index(c)
+            if forward:
+                if idx + 1 < len(tab_cols):
+                    return r, tab_cols[idx + 1]
+                r += 1
+                if r >= nrows:
+                    r = 1
+                return r, self._tabable_columns(r)[0]
+            else:
+                if idx - 1 >= 0:
+                    return r, tab_cols[idx - 1]
+                r -= 1
+                if r <= 0:
+                    r = nrows - 1
+                cols = self._tabable_columns(r)
+                return r, cols[-1]
+        return row, col
+
+    def _activate(self, row, col):
+        table = self.table
+        sw = self.stats_widget
+        if row <= 0:
+            row = 1
+        table.setCurrentCell(row, col)
+        if not _attachment_cell_is_editable(table, row, col):
+            return
+        # 纯下拉 force_open 灌选项；可编辑下拉不展开
+        force_open = col in _attachment_dropdown_columns(sw) and not _is_attachment_editable_combo_column(col)
+        handle_attachment_table_dropdown_click(sw, row, col, force_open=force_open)
+
+    def _navigate(self, from_row, from_col, forward, gen):
+        if gen != self._nav_gen or self.stats_widget is None:
+            return
+        row, col = self._find_next(from_row, from_col, forward=forward)
+        self._activate(row, col)
+
+    def eventFilter(self, obj, event):
+        if self.stats_widget is None:
+            return False
+        if event.type() != QEvent.KeyPress:
+            return super().eventFilter(obj, event)
+        key = event.key()
+        if key not in (Qt.Key_Tab, Qt.Key_Backtab):
+            return super().eventFilter(obj, event)
+        if not self._in_attachment_context():
+            return super().eventFilter(obj, event)
+
+        forward = key != Qt.Key_Backtab and not bool(event.modifiers() & Qt.ShiftModifier)
+        table = self.table
+        idx = table.currentIndex()
+        if not idx.isValid() or idx.row() <= 0:
+            return True
+
+        from_row, from_col = idx.row(), idx.column()
+        editing = table.state() == QAbstractItemView.EditingState or any(
+            c.view() and c.view().isVisible() for c in table.findChildren(QComboBox)
+        )
+        if editing:
+            open_combo = None
+            for combo in table.findChildren(QComboBox):
+                try:
+                    if combo.view() and combo.view().isVisible():
+                        open_combo = combo
+                        break
+                except RuntimeError:
+                    continue
+            if open_combo is not None:
+                try:
+                    if open_combo.isEditable():
+                        _commit_editable_combo_keeping_typed_text(open_combo)
+                    else:
+                        open_combo.hidePopup()
+                    delegate = table.itemDelegate(idx)
+                    delegate.commitData.emit(open_combo)
+                    delegate.closeEditor.emit(
+                        open_combo, QAbstractItemDelegate.SubmitModelCache
+                    )
+                except Exception:
+                    table.setFocus(Qt.OtherFocusReason)
+            else:
+                fw = QApplication.focusWidget()
+                delegate = table.itemDelegate(idx)
+                editor = fw
+                while editor is not None and editor is not table:
+                    try:
+                        delegate.commitData.emit(editor)
+                        delegate.closeEditor.emit(
+                            editor, QAbstractItemDelegate.SubmitModelCache
+                        )
+                        break
+                    except Exception:
+                        editor = editor.parentWidget()
+                else:
+                    table.setFocus(Qt.OtherFocusReason)
+            self._nav_gen += 1
+            gen = self._nav_gen
+            QTimer.singleShot(
+                0, lambda: self._navigate(from_row, from_col, forward, gen)
+            )
+            return True
+
+        self._navigate(from_row, from_col, forward, self._nav_gen)
+        return True
 
 
 # === 对公称尺寸、法兰标准、压力等级、法兰型式、密封面型式进行多行定义的时候最后一行编辑保护过滤器 ===
@@ -370,7 +1333,7 @@ class LastRowEditProtector(QObject):
                     pipe_code_item = self.table.item(row, 1)
                     has_pipe_code = pipe_code_item.text().strip() != "" if pipe_code_item else False
 
-                    if not has_pipe_code and column in get_pipe_last_row_editable_columns(
+                    if not has_pipe_code and column in get_pipe_last_row_frozen_edit_columns(
                             getattr(self.stats_widget, 'is_container_product', False)):
                         print(f"[DEBUG] 过滤器阻止最后一行编辑：行={row}, 列={column}, 事件={event.type()}")
                         return True  # 阻止事件传递
@@ -409,83 +1372,86 @@ class AttachmentEmptyComponentNameEditProtector(QObject):
         return super().eventFilter(obj, event)
 
 
-# === 自定义选择模型，阻止选中最后一行空白行的特定列 ===
+# === 自定义选择模型：最后一行无代号时，禁编列不进选区（可焦点、不深蓝高亮）===
 class CustomSelectionModel(QItemSelectionModel):
     def __init__(self, model, stats_widget):
         super().__init__(model)
         self.stats_widget = stats_widget
         self.table = stats_widget.tableWidget_pipe
 
-    def select(self, selection, command):
-        # 过滤选择范围，移除最后一行空白行的目标列单元格
-        if hasattr(selection, 'indexes'):
-            # 处理 QItemSelection
-            filtered_selection = selection.__class__()
-            for sel_range in selection:
-                filtered_range = self.filter_selection_range(sel_range)
-                if not filtered_range.isEmpty():
-                    filtered_selection.append(filtered_range)
-            super().select(filtered_selection, command)
-        else:
-            # 处理单个 QModelIndex
-            if self.is_valid_selection(selection):
-                super().select(selection, command)
+    def _frozen_columns(self):
+        return get_pipe_last_row_frozen_edit_columns(
+            getattr(self.stats_widget, "is_container_product", False)
+        )
+
+    def _last_row_blocks_selection(self):
+        return _pipe_last_row_no_code(self.stats_widget, self.table)
+
+    def is_valid_selection(self, index):
+        """单个索引是否允许进入选区（焦点另议）。"""
+        if not index.isValid():
+            return True
+        last_row = self.table.rowCount() - 1
+        if index.row() != last_row or not self._last_row_blocks_selection():
+            return True
+        return index.column() not in self._frozen_columns()
 
     def filter_selection_range(self, sel_range):
-        """过滤选择范围，移除最后一行空白行的目标列"""
+        """过滤选区：无代号时去掉最后一行禁选列；多行跨选则不含最后一行。"""
         top = sel_range.top()
         bottom = sel_range.bottom()
         left = sel_range.left()
         right = sel_range.right()
-
         last_row = self.table.rowCount() - 1
-        target_columns = get_pipe_last_row_editable_columns(
-            getattr(self.stats_widget, 'is_container_product', False)
-        )
 
-        # 如果选择范围包含最后一行
-        if bottom == last_row:
-            # 检查最后一行是否有管口代号
-            pipe_code_item = self.table.item(last_row, 1)
-            has_pipe_code = pipe_code_item.text().strip() != "" if pipe_code_item else False
+        if bottom != last_row or not self._last_row_blocks_selection():
+            if top <= bottom and left <= right:
+                return sel_range.__class__(
+                    self.model().index(top, left),
+                    self.model().index(bottom, right),
+                )
+            return sel_range.__class__()
 
-            if not has_pipe_code:
-                # 检查选择范围是否包含目标列
-                if any(col in target_columns for col in range(left, right + 1)):
-                    # 如果只选择了最后一行，返回空选择
-                    if top == bottom:
-                        return sel_range.__class__()
-                    # 否则，将选择范围缩小到倒数第二行
-                    bottom = last_row - 1
+        frozen = self._frozen_columns()
+        if top == bottom:
+            # 仅最后一行：只保留可进选区的列（通常仅管口代号）
+            allowed = [c for c in range(left, right + 1) if c not in frozen]
+            if not allowed:
+                return sel_range.__class__()
+            return sel_range.__class__(
+                self.model().index(top, min(allowed)),
+                self.model().index(top, max(allowed)),
+            )
 
-        # 返回过滤后的选择范围
+        # 跨多行：选区不含最后一行，避免占位行搅乱多选
+        bottom = last_row - 1
         if top <= bottom and left <= right:
             return sel_range.__class__(
                 self.model().index(top, left),
-                self.model().index(bottom, right)
+                self.model().index(bottom, right),
             )
-        else:
-            return sel_range.__class__()
+        return sel_range.__class__()
 
-    def is_valid_selection(self, index):
-        """检查单个索引是否可以被选择"""
-        if not index.isValid():
-            return True
+    def select(self, selection, command):
+        if isinstance(selection, QItemSelection):
+            filtered = QItemSelection()
+            for sel_range in selection:
+                fr = self.filter_selection_range(sel_range)
+                if not fr.isEmpty():
+                    filtered.append(fr)
+            # 点到禁选格且过滤后为空：不调用 super，以免 ClearAndSelect 清掉已有多选
+            if filtered.isEmpty():
+                if (command & QItemSelectionModel.ClearAndSelect) == QItemSelectionModel.ClearAndSelect:
+                    return
+                if not (command & QItemSelectionModel.Clear):
+                    return
+            super().select(filtered, command)
+            return
 
-        row = index.row()
-        column = index.column()
-        last_row = self.table.rowCount() - 1
-        target_columns = get_pipe_last_row_editable_columns(
-            getattr(self.stats_widget, 'is_container_product', False)
-        )
-
-        # 如果是最后一行的目标列
-        if row == last_row and column in target_columns:
-            pipe_code_item = self.table.item(row, 1)
-            has_pipe_code = pipe_code_item.text().strip() != "" if pipe_code_item else False
-            return has_pipe_code
-
-        return True
+        # 单个 QModelIndex：禁选列不入选区（焦点由点击处理）
+        if not self.is_valid_selection(selection):
+            return
+        super().select(selection, command)
 
 # === 主程序 ===
 class Stats(QtWidgets.QWidget):
@@ -516,6 +1482,8 @@ class Stats(QtWidgets.QWidget):
             ui_filename = "pipe_attachment_define.ui"
         ui_path = os.path.join(ui_dir, ui_filename)
         uic.loadUi(ui_path, self)
+        # 2026-07-19：上下拉伸、等比缩放及流畅度优化已完整封装，一行安装。
+        install_pipe_definition_resizable_view(self)
 
         self.current_product_type = product_type or ""
         self.is_container_product = is_container_product_type(self.current_product_type)
@@ -640,6 +1608,8 @@ class Stats(QtWidgets.QWidget):
             self.view.query_current_units = lambda: get_current_unit_types_from_ui(self)  # ✅ 让视图能获取当前公称尺寸的单位
             self.view.set_pipe_data(self.get_all_pipe_data())
 
+
+
         #管口删除
         self.pushButton_pipe_delete.clicked.connect(lambda: delete_selected_pipe_rows(self, self.product_id))
         #附件删除
@@ -657,8 +1627,11 @@ class Stats(QtWidgets.QWidget):
         self.pushButton_pipe_up.clicked.connect(lambda: move_selected_pipe_rows_up(self))
         #管口下移
         self.pushButton_pipe_down.clicked.connect(lambda: move_selected_pipe_rows_down(self))
-        #管口信息导出
+        #管口信息导出（管口总览表）
         self.pushButton_out.clicked.connect(self._on_click_export)
+        #管口导出表（横表模板，pushButton_out2）
+        if hasattr(self, "pushButton_out2"):
+            self.pushButton_out2.clicked.connect(self._on_click_export_define_sheet)
         #管口复制
         self.pushButton_cv.clicked.connect(lambda: copy_pipe_data(self, product_id))
         #管口信息导入
@@ -668,6 +1641,9 @@ class Stats(QtWidgets.QWidget):
         self.tableWidget_pipe.cellChanged.connect(self.handle_cell_change)
         # 单元格监听——单击变下拉框
         self.tableWidget_pipe.cellClicked.connect(self.handle_pipe_cell_click)
+        # 下拉箭头：在 MousePress 阶段快照多选并拦截清选（须在 cellClicked 之前）
+        self._pipe_combo_arrow_filter = PipeComboArrowMouseFilter(self.tableWidget_pipe, self)
+        self.tableWidget_pipe.viewport().installEventFilter(self._pipe_combo_arrow_filter)
         # 附件定义：单元格监听——单击变下拉框（接口预留）
         self.tableWidget_attachment.cellClicked.connect(self.handle_attachment_cell_click)
         # 高亮行
@@ -685,9 +1661,26 @@ class Stats(QtWidgets.QWidget):
         # self.tableWidget_pipe.installEventFilter(self)
 
         #回车事件到下一行（同列自动进入编辑/下拉）
-        self.tableWidget_pipe.installEventFilter(ReturnKeyJumpFilter(self.tableWidget_pipe, self))
-        # 附件定义表：回车下一行（不跳到第0行表头，见 AttachmentReturnKeyJumpFilter）
-        self.tableWidget_attachment.installEventFilter(AttachmentReturnKeyJumpFilter(self.tableWidget_attachment))
+        self._pipe_return_key_filter = ReturnKeyJumpFilter(self.tableWidget_pipe, self)
+        self.tableWidget_pipe.installEventFilter(self._pipe_return_key_filter)
+        # Tab / Shift+Tab：切列并灌下拉选项
+        self._pipe_tab_key_filter = TabKeyJumpFilter(self.tableWidget_pipe, self)
+        self.tableWidget_pipe.installEventFilter(self._pipe_tab_key_filter)
+        # 附件定义表：回车下一行（不跳到第0行表头）；Tab 切列；箭头开下拉
+        self._attachment_return_key_filter = AttachmentReturnKeyJumpFilter(
+            self.tableWidget_attachment, self
+        )
+        self.tableWidget_attachment.installEventFilter(self._attachment_return_key_filter)
+        self._attachment_tab_key_filter = AttachmentTabKeyJumpFilter(
+            self.tableWidget_attachment, self
+        )
+        self.tableWidget_attachment.installEventFilter(self._attachment_tab_key_filter)
+        self._attachment_combo_arrow_filter = AttachmentComboArrowMouseFilter(
+            self.tableWidget_attachment, self
+        )
+        self.tableWidget_attachment.viewport().installEventFilter(
+            self._attachment_combo_arrow_filter
+        )
         # 附件定义表：无元件名称时禁止后续列双击/按键进入编辑（与管口 LastRowEditProtector 对齐）
         self.tableWidget_attachment.installEventFilter(
             AttachmentEmptyComponentNameEditProtector(self.tableWidget_attachment)
@@ -701,12 +1694,74 @@ class Stats(QtWidgets.QWidget):
         self.clear_bottom_tip()
 
         # ===== 批量赋值状态跟踪 =====
-        # 用于第4-9列（公称尺寸、法兰规格四列、焊端规格）
+        # 下拉批量列 + 轴向夹角/周向方位/偏心距纯输入批量
         self.bulk_assign_target_column = None
         self.bulk_assign_rows = []
 
         QTimer.singleShot(1000, lambda: show_pending_duplicate_function_warning(self))
 
+    def closeEvent(self, event):
+        """关闭时卸下全局/表格过滤器。"""
+        self._pipe_closing = True
+        try:
+            filt = getattr(self, "_pipe_return_key_filter", None)
+            if filt is not None:
+                filt.cleanup()
+                self._pipe_return_key_filter = None
+            tab_filt = getattr(self, "_pipe_tab_key_filter", None)
+            if tab_filt is not None:
+                tab_filt.cleanup()
+                self._pipe_tab_key_filter = None
+            att_ret = getattr(self, "_attachment_return_key_filter", None)
+            if att_ret is not None:
+                att_ret.cleanup()
+                self._attachment_return_key_filter = None
+            att_tab = getattr(self, "_attachment_tab_key_filter", None)
+            if att_tab is not None:
+                att_tab.cleanup()
+                self._attachment_tab_key_filter = None
+            att_arrow = getattr(self, "_attachment_combo_arrow_filter", None)
+            att_table = getattr(self, "tableWidget_attachment", None)
+            if att_arrow is not None:
+                try:
+                    if att_table is not None and not sip.isdeleted(att_table):
+                        vp = att_table.viewport()
+                        if vp is not None and not sip.isdeleted(vp):
+                            vp.removeEventFilter(att_arrow)
+                except RuntimeError:
+                    pass
+                try:
+                    att_arrow.stats_widget = None
+                    att_arrow.table = None
+                except RuntimeError:
+                    pass
+                self._attachment_combo_arrow_filter = None
+            arrow_filt = getattr(self, "_pipe_combo_arrow_filter", None)
+            table = getattr(self, "tableWidget_pipe", None)
+            if arrow_filt is not None:
+                try:
+                    if table is not None and not sip.isdeleted(table):
+                        vp = table.viewport()
+                        if vp is not None and not sip.isdeleted(vp):
+                            vp.removeEventFilter(arrow_filt)
+                except RuntimeError:
+                    pass
+                try:
+                    arrow_filt.stats_widget = None
+                    arrow_filt.table = None
+                except RuntimeError:
+                    pass
+                self._pipe_combo_arrow_filter = None
+            from modules.guankoudingyi.funcs.funcs_pipe_comboBox_value import (
+                release_bulk_assign_edit_guard,
+            )
+            release_bulk_assign_edit_guard(self, table)
+            for delegate in (getattr(self, "pipe_column_delegates", {}) or {}).values():
+                if hasattr(delegate, "stats_widget"):
+                    delegate.stats_widget = None
+        except Exception:
+            pass
+        super().closeEvent(event)
 
     """设置冻结的表头"""
     def setup_tableWidget_pipe_title_freeze(self):
@@ -835,9 +1890,10 @@ class Stats(QtWidgets.QWidget):
                 layout.addWidget(combo)
                 table_title.setCellWidget(1, i, widget)
             else:
-                # 无单位字段，合并第2、3行，垂直居中
+                # 无单位字段，合并第2、3行，垂直居中（部分表头两行显示）
                 table_title.setSpan(1, i, 2, 1)
-                item = QTableWidgetItem(key)
+                display = PIPE_HEADER_DISPLAY_LINES.get(key, key)
+                item = QTableWidgetItem(display)
                 item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
                 table_title.setItem(1, i, item)
 
@@ -879,18 +1935,22 @@ class Stats(QtWidgets.QWidget):
         # 隐藏表头
         table_pipe.horizontalHeader().setVisible(False)
 
+        # 禁止双击/按键默认开编：下拉列只能走箭头或 handle_pipe_cell_click 灌选项后 editItem，
+        # 否则刚进界面双击纯下拉会绕过灌选项并自动 showPopup，看起来像多行同时开下拉。
+        # 程序化 editItem / frozen.edit 不受影响（普通列单击、Enter/Tab 跳行仍可进编辑）。
+        table_pipe.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+
         # 设置与冻结表头相同的列数
         table_pipe.setColumnCount(self.tableWidget_pipe_title.columnCount())
 
         # 垂直滚轮：按像素滚动并减小步长（系统默认约一次 3 行，改为约 1 行）
         self._apply_pipe_vertical_scroll_step(table_pipe)
 
-        # 设置自定义选择模型，阻止选中最后一行空白行的特定列
+        # 选择模型：最后一行无代号时禁编列不进选区；可焦点、编辑由 Protector/flags 拦截
         custom_selection_model = CustomSelectionModel(table_pipe.model(), self)
         table_pipe.setSelectionModel(custom_selection_model)
-
-        # 连接选择变化信号，额外过滤最后一行空白行
-        custom_selection_model.selectionChanged.connect(self.filter_last_row_selection)
+        # setSelectionModel 会换掉旧模型，需重新挂高亮
+        custom_selection_model.selectionChanged.connect(self.highlight_selected_rows)
 
         # 锁定第一列（序号列）不可编辑
         for row in range(table_pipe.rowCount()):
@@ -915,6 +1975,8 @@ class Stats(QtWidgets.QWidget):
         single_step = max(1, int(row_height / 3))
         table.verticalScrollBar().setSingleStep(single_step)
 
+
+
     def setup_pipe_frozen_columns(self):
         self.pipe_frozen_columns = (0, 1)
         self.tableWidget_pipe_title_frozen = self._create_pipe_frozen_view(
@@ -926,6 +1988,8 @@ class Stats(QtWidgets.QWidget):
         self.tableWidget_pipe_frozen.setSelectionModel(
             self.tableWidget_pipe.selectionModel()
         )
+        # 冻结列（序号/管口代号）点击落在叠层上，需转发到统一单击编辑逻辑
+        self.tableWidget_pipe_frozen.clicked.connect(self._on_pipe_frozen_cell_clicked)
         self.tableWidget_pipe.verticalScrollBar().valueChanged.connect(
             self.tableWidget_pipe_frozen.verticalScrollBar().setValue
         )
@@ -948,6 +2012,8 @@ class Stats(QtWidgets.QWidget):
         for table in (self.tableWidget_pipe, self.tableWidget_pipe_title):
             table.installEventFilter(self)
             table.viewport().installEventFilter(self)
+            table.horizontalHeader().sectionResized.connect(sync_later)
+            table.verticalHeader().sectionResized.connect(sync_later)
 
         self._sync_pipe_frozen_columns()
 
@@ -956,6 +2022,8 @@ class Stats(QtWidgets.QWidget):
         frozen.setModel(source_table.model())
         frozen.setObjectName(f"{source_table.objectName()}_frozen")
         frozen.setFrameShape(QtWidgets.QFrame.NoFrame)
+        frozen.setContentsMargins(0, 0, 0, 0)
+        frozen.setViewportMargins(0, 0, 0, 0)
         frozen.setShowGrid(source_table.showGrid())
         frozen.setGridStyle(source_table.gridStyle())
         # 不复制主表外框样式，避免冻结叠层多出一圈边框；网格线与底色与主表一致
@@ -966,12 +2034,23 @@ class Stats(QtWidgets.QWidget):
                 gridline-color: palette(midlight);
             }
         """)
+        frozen.setFont(source_table.font())
+        frozen.setPalette(source_table.palette())
         frozen.setAlternatingRowColors(source_table.alternatingRowColors())
         frozen.setWordWrap(source_table.wordWrap())
+        frozen.setTextElideMode(source_table.textElideMode())
         frozen.horizontalHeader().setVisible(False)
         frozen.verticalHeader().setVisible(False)
         frozen.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
         frozen.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+        frozen.verticalHeader().setMinimumSectionSize(
+            source_table.verticalHeader().minimumSectionSize()
+        )
+        frozen.verticalHeader().setDefaultSectionSize(
+            source_table.verticalHeader().defaultSectionSize()
+        )
+        frozen.setHorizontalScrollMode(source_table.horizontalScrollMode())
+        frozen.setVerticalScrollMode(source_table.verticalScrollMode())
         frozen.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         frozen.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         if source_table is self.tableWidget_pipe:
@@ -994,6 +2073,7 @@ class Stats(QtWidgets.QWidget):
         return frozen
 
     def _sync_pipe_frozen_columns(self):
+        """同步冻结列几何信息；全部使用 Qt 的逻辑像素，避免不同 DPI 下错位。"""
         pairs = (
             (self.tableWidget_pipe_title, getattr(self, "tableWidget_pipe_title_frozen", None)),
             (self.tableWidget_pipe, getattr(self, "tableWidget_pipe_frozen", None)),
@@ -1002,33 +2082,71 @@ class Stats(QtWidgets.QWidget):
             if frozen is None:
                 continue
 
-            frozen.clearSpans()
-            frozen_columns_width = 0
-            for col in range(source_table.columnCount()):
-                visible = col in self.pipe_frozen_columns and not source_table.isColumnHidden(col)
-                frozen.setColumnHidden(col, not visible)
-                if visible:
-                    col_width = source_table.columnWidth(col)
-                    frozen.setColumnWidth(col, col_width)
-                    frozen_columns_width += col_width
+            # 2026-07-19：冻结视图与主表必须共享完全相同的字体、DPI 逻辑尺寸、
+            # 行高和 viewport 原点；禁止再移动整个冻结视图做二次像素补偿。
+            frozen.setUpdatesEnabled(False)
+            try:
+                frozen.setFont(source_table.font())
+                frozen.setPalette(source_table.palette())
+                frozen.setGridStyle(source_table.gridStyle())
+                frozen.setTextElideMode(source_table.textElideMode())
+                frozen.verticalHeader().setMinimumSectionSize(
+                    source_table.verticalHeader().minimumSectionSize()
+                )
+                frozen.verticalHeader().setDefaultSectionSize(
+                    source_table.verticalHeader().defaultSectionSize()
+                )
 
-            for row in range(source_table.rowCount()):
-                frozen.setRowHeight(row, source_table.rowHeight(row))
+                frozen.clearSpans()
+                visible_cols = []
+                for col in range(source_table.columnCount()):
+                    visible = col in self.pipe_frozen_columns and not source_table.isColumnHidden(col)
+                    frozen.setColumnHidden(col, not visible)
+                    if visible:
+                        frozen.setColumnWidth(col, source_table.columnWidth(col))
+                        visible_cols.append(col)
 
-            if source_table is self.tableWidget_pipe_title:
-                for col in self.pipe_frozen_columns:
-                    if col < source_table.columnCount() and not source_table.isColumnHidden(col):
+                # 逐行复制最终 sectionSize，而不是依赖默认行高或字体估算。
+                for row in range(source_table.rowCount()):
+                    frozen.setRowHeight(row, source_table.rowHeight(row))
+
+                if source_table is self.tableWidget_pipe_title:
+                    for col in visible_cols:
                         frozen.setSpan(0, col, 3, 1)
 
-            viewport_geometry = source_table.viewport().geometry()
-            frozen.setGeometry(
-                viewport_geometry.x(),
-                viewport_geometry.y(),
-                frozen_columns_width,
-                viewport_geometry.height(),
-            )
-            frozen.setVisible(frozen_columns_width > 0 and source_table.isVisible())
-            frozen.raise_()
+                if not visible_cols:
+                    frozen.setVisible(False)
+                    continue
+
+                frozen_columns_width = sum(
+                    source_table.horizontalHeader().sectionSize(col)
+                    for col in visible_cols
+                )
+                if frozen_columns_width > 0:
+                    # 保留最后一列右缘网格线，宽度仍为 Qt 逻辑像素。
+                    frozen_columns_width += 1
+
+                # viewport.geometry() 已经是 source_table 坐标，能同时包含系统样式、
+                # frameWidth 和高 DPI 取整结果；不再自行 mapTo/visualRect 叠加修正。
+                viewport_geometry = source_table.viewport().geometry()
+                frozen.setGeometry(
+                    viewport_geometry.x(),
+                    viewport_geometry.y(),
+                    min(frozen_columns_width, viewport_geometry.width()),
+                    viewport_geometry.height(),
+                )
+                frozen.horizontalScrollBar().setValue(0)
+                frozen.updateGeometries()
+                if source_table is self.tableWidget_pipe:
+                    frozen.verticalScrollBar().setValue(
+                        source_table.verticalScrollBar().value()
+                    )
+
+                frozen.setVisible(frozen_columns_width > 0 and source_table.isVisible())
+                frozen.raise_()
+            finally:
+                frozen.setUpdatesEnabled(True)
+                frozen.viewport().update()
 
         data_frozen = getattr(self, "tableWidget_pipe_frozen", None)
         if data_frozen is not None:
@@ -1050,6 +2168,9 @@ class Stats(QtWidgets.QWidget):
             QEvent.Show,
             QEvent.Hide,
             QEvent.LayoutRequest,
+            QEvent.FontChange,
+            QEvent.StyleChange,
+            QEvent.ApplicationFontChange,
         ):
             QTimer.singleShot(0, self._sync_pipe_frozen_columns)
         return super().eventFilter(obj, event)
@@ -1179,21 +2300,11 @@ class Stats(QtWidgets.QWidget):
                 :param row: 修改的行号
                 :param column: 修改的列号
                 """
-        table = self.tableWidget_pipe
-        # ✅ 管口代号列：检测是否重复
-        if column == 1:
-            item = table.item(row, column)
-            if item:
-                new_code = item.text().strip()
-                if new_code:
-                    for r in range(table.rowCount()):
-                        if r != row:
-                            other_item = table.item(r, 1)
-                            if other_item and other_item.text().strip() == new_code:
-                                QMessageBox.warning(self, "管口代号重复", f"管口代号 '{new_code}' 已存在，禁止重复。")
-                                item.setText("")  # 清空
-                                table.setCurrentCell(row, column)
-                                return
+        # 程序性 setText（校验回写）跳过，避免与 handle_pipe_cell_changed 叠加重入
+        if getattr(self, "suppress_cell_change", False):
+            return
+
+        # 管口代号/管口功能重复校验统一在 handle_pipe_cell_changed 中处理，此处不再重复弹窗
 
         # 如果是管口代号列(column==1)且没有保存旧值，则假设是新添加的行，将old_port_code设为空
         if column == 1 and not hasattr(self, 'old_port_code'):
@@ -1213,21 +2324,34 @@ class Stats(QtWidgets.QWidget):
     """处理单元格单击的监听，单击变成下拉框"""
     def handle_pipe_cell_click(self, row, column):
         """监听管口表单元格点击，若是五个目标字段，则转换为下拉框"""
-        # 首先检查最后一行的限制：如果是最后一行且没有管口代号，不允许编辑
+        # 箭头 MousePress 已自行打开下拉时，忽略随后可能到达的 cellClicked
+        if getattr(self, "_pipe_ignore_cell_click", False):
+            return
+        # 最后一行且无管口代号：仅允许编辑代号列；其它列只给焦点框、不进选区
         table = self.tableWidget_pipe
         if row == table.rowCount() - 1:
             pipe_code_item = table.item(row, 1)
             has_pipe_code = pipe_code_item.text().strip() != "" if pipe_code_item else False
-            if not has_pipe_code:
+            if not has_pipe_code and column != 1:
                 print(f"[DEBUG] 阻止最后一行编辑：行={row}, 列={column}, 有管口代号={has_pipe_code}")
-                return  # 阻止最后一行在没有管口代号时编辑
+                _pipe_set_last_row_focus_only(table, row, column)
+                return
 
-        handle_pipe_cell_click(self, row, column)
+        # 下拉列：空白单击只选中；箭头由 PipeComboArrowMouseFilter 打开
+        handle_pipe_cell_click(self, row, column, force_open=False)
+
+    def _on_pipe_frozen_cell_clicked(self, index):
+        """冻结叠层单击：转发到主表同一套单击编辑（管口代号等）。"""
+        if not index.isValid():
+            return
+        self.handle_pipe_cell_click(index.row(), index.column())
 
     def handle_attachment_cell_click(self, row, column):
         """监听附件定义表单元格点击（逻辑见 funcs_attachment_comboBox_value.handle_attachment_cell_click）。"""
+        if getattr(self, "_attachment_ignore_cell_click", False):
+            return
         try:
-            handle_attachment_table_dropdown_click(self, row, column)
+            handle_attachment_table_dropdown_click(self, row, column, force_open=False)
         except Exception as e:
             print(f"[ERROR] 附件表单元格点击处理失败: {e}")
             import traceback
@@ -1238,12 +2362,32 @@ class Stats(QtWidgets.QWidget):
         """对指定 QTableWidget 应用“选中行/选中单元格”高亮样式。"""
         total_columns = table.columnCount()
         selected_indexes = table.selectedIndexes()
-        if not selected_indexes:
-            return None
 
         selected_rows = set(index.row() for index in selected_indexes)
         selected_cells = set((index.row(), index.column()) for index in selected_indexes)
 
+        # 批量下拉编辑中：editItem 常收成单格，用快照行保持多选高亮
+        bulk_active = bool(getattr(self, "_pipe_bulk_edit_active", False))
+        if table is getattr(self, "tableWidget_pipe", None):
+            bulk_active = bulk_active or bool(table.property("pipe_bulk_edit_active"))
+            if bulk_active:
+                snap_rows = list(getattr(self, "_bulk_assign_rows_snapshot", []) or [])
+                snap_col = getattr(self, "bulk_assign_target_column", None)
+                if snap_rows and snap_col is not None:
+                    selected_rows.update(snap_rows)
+                    selected_cells.update((r, snap_col) for r in snap_rows)
+        elif table is getattr(self, "tableWidget_attachment", None):
+            if getattr(self, "_attachment_bulk_edit_active", False):
+                snap_rows = list(getattr(self, "_attachment_bulk_rows_snapshot", []) or [])
+                snap_col = getattr(self, "attachment_bulk_assign_target_column", None)
+                if snap_rows and snap_col is not None:
+                    selected_rows.update(snap_rows)
+                    selected_cells.update((r, snap_col) for r in snap_rows)
+
+        if not selected_rows:
+            return None
+
+        # 与单选一致：整行浅蓝，选中格深蓝（多选/批量同样规则）
         # 当前正在编辑单元格（用于跳过正在编辑状态，避免闪烁）
         # 附件表带列委托时，indexWidget 在部分环境下可能不稳定，此处跳过以避免崩溃
         is_editing = False
@@ -1293,6 +2437,19 @@ class Stats(QtWidgets.QWidget):
 
     def highlight_selected_rows(self):
         """统一高亮逻辑：普通单元格和下拉框完全一致处理，不做特殊样式覆盖"""
+        # 兜底剔除最后一行禁选列，再更新批量/高亮
+        try:
+            self.filter_last_row_selection(None, None)
+        except Exception as e:
+            print(f"过滤最后一行选区出错: {str(e)}")
+
+        # 先按当前选区更新/解除批量保护，再高亮（避免快照把已取消的多选又画回来）
+        try:
+            from modules.guankoudingyi.funcs.funcs_pipe_comboBox_value import update_bulk_assign_state
+            update_bulk_assign_state(self)
+        except Exception as e:
+            print(f"更新批量赋值状态出错: {str(e)}")
+
         try:
             self.tableWidget_pipe.cellChanged.disconnect(self.handle_cell_change)
             table = self.tableWidget_pipe
@@ -1318,13 +2475,6 @@ class Stats(QtWidgets.QWidget):
                 self.tableWidget_pipe.cellChanged.connect(self.handle_cell_change)
             except Exception:
                 pass
-
-        # 在高亮刷新后，更新批量赋值状态
-        try:
-            from modules.guankoudingyi.funcs.funcs_pipe_comboBox_value import update_bulk_assign_state
-            update_bulk_assign_state(self)
-        except Exception as e:
-            print(f"更新批量赋值状态出错: {str(e)}")
 
     def highlight_selected_attachment_rows(self):
         """附件定义表格高亮：复用管口相同的高亮样式逻辑（不同步绘图模块）。"""
@@ -1381,66 +2531,21 @@ class Stats(QtWidgets.QWidget):
                 data.append(item)
         return data
 
-    """过滤选择，移除最后一行空白行的特定列选择"""
     def filter_last_row_selection(self, selected, deselected):
-
+        """兜底：无代号时剔除最后一行禁选列，避免误入深蓝选区。"""
+        if not _pipe_last_row_no_code(self):
+            return
         table = self.tableWidget_pipe
+        sel = table.selectionModel()
+        if sel is None:
+            return
         last_row = table.rowCount() - 1
-        target_columns = get_pipe_last_row_editable_columns(
-            getattr(self, 'is_container_product', False)
+        frozen = get_pipe_last_row_frozen_edit_columns(
+            getattr(self, "is_container_product", False)
         )
-
-        # 检查最后一行是否有管口代号
-        pipe_code_item = table.item(last_row, 1)
-        has_pipe_code = pipe_code_item.text().strip() != "" if pipe_code_item else False
-
-        if not has_pipe_code:
-            # 获取当前选择
-            selection_model = table.selectionModel()
-            current_selection = selection_model.selection()
-
-            # 检查是否有最后一行的目标列被选中
-            should_clear = False
-            for sel_range in current_selection:
-                if sel_range.bottom() == last_row:
-                    # 检查是否包含目标列
-                    if any(col in target_columns for col in range(sel_range.left(), sel_range.right() + 1)):
-                        should_clear = True
-                        break
-
-            if should_clear:
-                # 创建新的选择，排除最后一行的目标列
-                from PyQt5.QtCore import QItemSelection
-                new_selection = QItemSelection()
-
-                for sel_range in current_selection:
-                    top = sel_range.top()
-                    bottom = sel_range.bottom()
-                    left = sel_range.left()
-                    right = sel_range.right()
-
-                    # 如果选择范围包含最后一行
-                    if bottom == last_row:
-                        # 检查是否包含目标列
-                        if any(col in target_columns for col in range(left, right + 1)):
-                            # 如果只选择了最后一行，跳过这个范围
-                            if top == bottom:
-                                continue
-                            # 否则，缩小选择范围到倒数第二行
-                            bottom = last_row - 1
-
-                    # 添加过滤后的范围
-                    if top <= bottom:
-                        new_selection.select(
-                            table.model().index(top, left),
-                            table.model().index(bottom, right)
-                        )
-
-                # 应用新的选择
-                selection_model.blockSignals(True)
-                selection_model.clearSelection()
-                selection_model.select(new_selection, QItemSelectionModel.Select)
-                selection_model.blockSignals(False)
+        for idx in list(sel.selectedIndexes()):
+            if idx.row() == last_row and idx.column() in frozen:
+                sel.select(idx, QItemSelectionModel.Deselect)
 
     def _on_click_export(self):
         try:
@@ -1449,11 +2554,20 @@ class Stats(QtWidgets.QWidget):
                 self.line_tip.setText("离开该界面前请勿忘记点击“确认”按钮！")
                 self.line_tip.setStyleSheet("color: #fcb15d; font-weight:bold;")
 
-            out_path = export_nozzle_listing(self)  # self 就是 stats_widget
-            if out_path:
-                QMessageBox.information(self, "导出成功", f"已导出到：\n{out_path}")
+            export_nozzle_listing(self)  # self 就是 stats_widget；成功后在导出函数内询问是否打开文件夹
         except Exception as e:
-            QMessageBox.critical(self, "导出失败", str(e))
+            show_styled_message(self, "导出失败", str(e), icon=QMessageBox.Critical)
+
+    def _on_click_export_define_sheet(self):
+        """导出按钮：界面数据填入导出模板.xlsx，另存为管口导出表+日期。"""
+        try:
+            if self.line_tip:
+                self.line_tip.setText("离开该界面前请勿忘记点击“确认”按钮！")
+                self.line_tip.setStyleSheet("color: #fcb15d; font-weight:bold;")
+            export_nozzle_define_sheet(self)  # 成功后在导出函数内询问是否打开文件夹
+        except Exception as e:
+            show_styled_message(self, "导出失败", str(e), icon=QMessageBox.Critical)
+
     """用于点击确认后，清除下方给出的提示"""
     def clear_bottom_tip(self):
         if self.line_tip:
@@ -1550,12 +2664,8 @@ class Stats(QtWidgets.QWidget):
         table_attach.setShowGrid(True)
         table_attach.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         table_attach.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectItems)
-        table_attach.setEditTriggers(
-            QtWidgets.QAbstractItemView.DoubleClicked
-            | QtWidgets.QAbstractItemView.SelectedClicked
-            | QtWidgets.QAbstractItemView.EditKeyPressed
-            | QtWidgets.QAbstractItemView.AnyKeyPressed
-        )
+        # 与管口表一致：禁止 Qt 默认编辑触发，仅由单击/箭头/键盘过滤器进入编辑
+        table_attach.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         table_attach.verticalHeader().setVisible(False)
         # 表头用 horizontalHeader 固定显示
         table_attach.horizontalHeader().setVisible(True)
@@ -1575,4 +2685,3 @@ class Stats(QtWidgets.QWidget):
         for col in range(table_attach.columnCount()):
             table_attach.resizeColumnToContents(col)
             table_attach.setColumnWidth(col, max(table_attach.columnWidth(col), min_widths.get(col, 100)))
-

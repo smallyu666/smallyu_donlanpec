@@ -1,5 +1,6 @@
 from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import QMessageBox, QLabel, QComboBox
+from PyQt5.QtGui import QColor, QBrush
+from PyQt5.QtWidgets import QMessageBox, QLabel, QComboBox, QTableWidgetItem
 import pymysql
 import time
 from modules.guankoudingyi.db_cnt import get_connection, db_config_2,db_config_material
@@ -9,7 +10,46 @@ from modules.guankoudingyi.funcs.funcs_pipe_table import (
     ensure_hidden_attachment_maps,
     get_next_attachment_id_runtime,
     get_pipe_column_map,
+    get_pipe_col,
 )
+from modules.cailiaodingyi.funcs.funcs_pdf_input import (
+    _component_to_material_category,
+    query_all_guankou_categories,
+)
+
+# 与 dynamically_adjust_ui._apply_highlight_to_table_cells 选中行非焦点格同色
+_PIPE_ROW_HIGHLIGHT_BG = QColor("#d0e7ff")
+
+
+def _highlight_pipe_rows(stats_widget, rows):
+    """
+    整行统一浅蓝色高亮（#d0e7ff）。
+    不用选区高亮：无管口代号时部分列不可选，选区只会覆盖可点列，
+    再叠加「选中格深蓝 / 同行浅蓝」会表现为断断续续。
+    """
+    table = getattr(stats_widget, "tableWidget_pipe", None)
+    if table is None or not rows:
+        return
+    brush = QBrush(_PIPE_ROW_HIGHLIGHT_BG)
+    fg = QColor("black")
+    col_count = table.columnCount()
+    # 清选区，避免 selectionChanged 把部分格刷成深蓝
+    table.clearSelection()
+    table.blockSignals(True)
+    try:
+        for row in rows:
+            for col in range(col_count):
+                item = table.item(row, col)
+                if item is None:
+                    item = QTableWidgetItem("")
+                    table.setItem(row, col, item)
+                item.setBackground(brush)
+                item.setForeground(fg)
+    finally:
+        table.blockSignals(False)
+    first_item = table.item(rows[0], 1) or table.item(rows[0], 0)
+    if first_item is not None:
+        table.scrollToItem(first_item)
 
 
 def save_all_pipe_data(stats_widget):
@@ -19,7 +59,11 @@ def save_all_pipe_data(stats_widget):
         * 必须有 管口代号
         * 取隐藏 管口ID；若无（极端情况），运行期分配一个
         * 对 产品设计活动表_管口表 做 INSERT ... ON DUPLICATE KEY UPDATE
-        * 同步对 产品设计活动表_管口类别表 做 INSERT ... ON DUPLICATE KEY UPDATE（四项：产品ID、管口ID、管口代号、管口所属元件）
+        * 同步对 产品设计活动表_管口类别表 做 INSERT ... ON DUPLICATE KEY UPDATE
+          （产品ID、管口ID、管口代号、管口所属元件、材料分类）
+        * 材料分类规则：
+          - 换热器：按管口所属元件分配管程/壳程；所属元件未改则保留元件定义侧已有分配
+          - 容器：不看所属元件，新增写入第一个材料分类 tab；已有分配则保留（支持元件定义手动改）
     - 对 stats_widget.deleted_pipe_ids ：逐个 DELETE WHERE 产品ID AND 管口ID（同时删除两张表里的对应记录）
     """
     ensure_hidden_maps(stats_widget)
@@ -32,22 +76,34 @@ def save_all_pipe_data(stats_widget):
 
     is_container = getattr(stats_widget, 'is_container_product', False)
 
-    # ===== 保存前校验：“管口功能”必填（仅换热器；容器不校验） =====
-    if table is not None and not is_container:
-        missing_codes = []
+    # ===== 保存前校验：管口代号必填；管口功能必填（仅换热器；容器不校验） =====
+    if table is not None:
+        empty_code_rows = []
+        missing_func_rows = []
         last_row = table.rowCount() - 1  # 排除最后空行
         for row in range(last_row):
             code_item = table.item(row, 1)  # 管口代号
             func_item = table.item(row, 2)  # 管口功能
             code = code_item.text().strip() if code_item else ""
             func = func_item.text().strip() if func_item else ""
-            if code and not func:
-                missing_codes.append(code)
-        if missing_codes:
-            msg = "请输入管口代号为 " + "、".join(missing_codes) + " 的管口功能"
+            if not code:
+                empty_code_rows.append(row)
+            elif not func:
+                missing_func_rows.append(row)
+
+        if empty_code_rows or missing_func_rows:
+            if empty_code_rows and missing_func_rows:
+                msg = '"管口代号"、"管口功能"不能为空，请补充'
+            elif empty_code_rows:
+                msg = '"管口代号"不能为空，请补充'
+            else:
+                msg = '"管口功能"不能为空，请补充'
             if hasattr(stats_widget, 'line_tip'):
                 stats_widget.line_tip.setText(msg)
                 stats_widget.line_tip.setStyleSheet("color: #FFA500;")  # 橘色提示
+            # 合并去重并保持行序，统一高亮
+            highlight_rows = sorted(set(empty_code_rows + missing_func_rows))
+            _highlight_pipe_rows(stats_widget, highlight_rows)
             return
         # ===== 校验通过，继续原有保存逻辑 =====
 
@@ -77,6 +133,44 @@ def save_all_pipe_data(stats_widget):
                 WHERE 产品ID=%s AND 管口ID=%s
             """, (product_id, hid))
         stats_widget.deleted_pipe_ids.clear()
+
+        # 保存前：旧所属元件（管口表）+ 已有材料分类（类别表）
+        cur.execute("""
+            SELECT 管口ID, 管口所属元件
+            FROM 产品设计活动表_管口表
+            WHERE 产品ID = %s
+        """, (product_id,))
+        prev_belong_map = {}
+        for r in cur.fetchall() or []:
+            pid = r.get("管口ID")
+            if pid is None:
+                continue
+            prev_belong_map[pid] = (r.get("管口所属元件") or "").strip()
+
+        cur.execute("""
+            SELECT 管口ID, 材料分类
+            FROM 产品设计活动表_管口类别表
+            WHERE 产品ID = %s
+        """, (product_id,))
+        prev_cat_map = {}
+        for r in cur.fetchall() or []:
+            pid = r.get("管口ID")
+            if pid is None:
+                continue
+            prev_cat_map[pid] = (r.get("材料分类") or "").strip()
+
+        belong_col = get_pipe_col(is_container, "管口所属元件")
+        newly_assigned_codes = []
+
+        # 当前产品可用材料分类（按 Tab_ID 顺序）；容器取第一个作为默认页
+        try:
+            available_categories = [
+                str(c).strip() for c in (query_all_guankou_categories(product_id) or [])
+                if str(c).strip()
+            ]
+        except Exception:
+            available_categories = []
+        default_first_tab = available_categories[0] if available_categories else "管口材料分类1"
 
         # —— 2) 逐行 Upsert（新增/修改）——
         last_row = table.rowCount() - 1
@@ -123,14 +217,53 @@ def save_all_pipe_data(stats_widget):
                 """
             cur.execute(sql, values)
 
-            # —— 2.2 同步写 "产品设计活动表_管口类别表"（四列）
-            # 获取管口所属元件
-            component = row_data.get("管口所属元件", "")
+            # —— 2.2 同步写 "产品设计活动表_管口类别表"（含材料分类）
+            if belong_col is not None:
+                belong_item = table.item(row, belong_col)
+                component = belong_item.text().strip() if belong_item else ""
+            else:
+                component = (row_data.get("管口所属元件") or "").strip()
+
+            prev_cat = prev_cat_map.get(hid, "")
+
+            if is_container:
+                # 容器：不看所属元件；新增写入第一个 tab；已有分配保留（元件定义可手动改）
+                if not prev_cat:
+                    material_category = default_first_tab
+                    newly_assigned_codes.append(port_code)
+                else:
+                    material_category = prev_cat
+            else:
+                # 换热器：按所属元件分配管程/壳程；未改所属元件则保留元件定义侧分配
+                mapped_cat = (
+                    _component_to_material_category(component, available_categories)
+                    if component else None
+                )
+                prev_belong = prev_belong_map.get(hid, "")
+                belong_changed = bool(component) and (component != prev_belong)
+
+                if belong_changed and mapped_cat:
+                    # 管口定义侧改了所属元件 → 按管口定义重新分配页面
+                    material_category = mapped_cat
+                    if not prev_cat:
+                        newly_assigned_codes.append(port_code)
+                elif (not prev_cat) and mapped_cat:
+                    # 首次按所属元件分配
+                    material_category = mapped_cat
+                    newly_assigned_codes.append(port_code)
+                else:
+                    # 所属元件未改：保留元件定义侧已有分配（允许两边不匹配）
+                    material_category = prev_cat or None
+
             cur.execute("""
-                INSERT INTO 产品设计活动表_管口类别表 (`产品ID`, `管口ID`, `管口代号`, `管口所属元件`)
-                VALUES (%s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE `管口代号`=VALUES(`管口代号`), `管口所属元件`=VALUES(`管口所属元件`)
-            """, (product_id, hid, port_code, component))
+                INSERT INTO 产品设计活动表_管口类别表
+                    (`产品ID`, `管口ID`, `管口代号`, `管口所属元件`, `材料分类`)
+                VALUES (%s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    `管口代号`=VALUES(`管口代号`),
+                    `管口所属元件`=VALUES(`管口所属元件`),
+                    `材料分类`=VALUES(`材料分类`)
+            """, (product_id, hid, port_code, component, material_category))
 
             # —— 2.3 同步更新 "产品设计活动表_管口载荷表" 的管口代号（按 产品ID+管口ID）
             cur.execute("""
@@ -144,9 +277,13 @@ def save_all_pipe_data(stats_widget):
         # —— 3) 保存管口附件数据 ——
         save_pipe_attachment_data(product_id, conn, cur)
 
-        # 在line_tip中显示保存成功信息
+        # 在line_tip中显示保存成功 / 自动分配提示
         if hasattr(stats_widget, 'line_tip'):
-            stats_widget.line_tip.setText("保存成功！")
+            if newly_assigned_codes:
+                tip_text = "新增管口已自动分配至管口材料分类下。"
+            else:
+                tip_text = "保存成功！"
+            stats_widget.line_tip.setText(tip_text)
             stats_widget.line_tip.setStyleSheet("color: black;")
             QTimer.singleShot(5000, lambda: stats_widget.line_tip.setText(""))
     except Exception as e:

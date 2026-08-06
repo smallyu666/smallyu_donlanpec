@@ -20,6 +20,89 @@ from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QTableWidgetSelectionRange
 
 from modules.guankoudingyi.db_cnt import get_connection, db_config_1, db_config_2
+from modules.chanpinguanli.ui_style import (
+    CHANPINGUANLI_BUTTON_QSS,
+    apply_chanpinguanli_dialog_style,
+)
+from modules.cailiaodingyi.controllers.style import apply_dialog_style
+
+
+def show_styled_confirm(parent, title, text, yes_text="确认", no_text="取消"):
+    """确认/取消：窗体与警告弹窗同用 apply_dialog_style（宋体 12pt）；按钮套 ui_style。"""
+    msg_box = QMessageBox(parent)
+    msg_box.setWindowModality(Qt.ApplicationModal)
+    msg_box.setWindowFlags(msg_box.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+    msg_box.setWindowTitle(title)
+    msg_box.setText(str(text))
+    msg_box.setIcon(QMessageBox.Question)
+    yes_button = msg_box.addButton(yes_text, QMessageBox.YesRole)
+    no_button = msg_box.addButton(no_text, QMessageBox.NoRole)
+    apply_dialog_style(msg_box)
+    yes_button.setStyleSheet(CHANPINGUANLI_BUTTON_QSS)
+    no_button.setStyleSheet(CHANPINGUANLI_BUTTON_QSS)
+    msg_box.exec_()
+    return msg_box.clickedButton() == yes_button
+
+
+def show_styled_message(parent, title, text, icon=QMessageBox.Information, button_text="确认"):
+    """
+    单按钮消息框：窗体 apply_dialog_style（宋体 12pt），按钮直接套 ui_style；
+    去掉标题栏「？」。不含 Enter 跳行门闩（通用提示用）。
+    """
+    msg_box = QMessageBox(parent)
+    msg_box.setWindowModality(Qt.ApplicationModal)
+    msg_box.setWindowFlags(msg_box.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+    msg_box.setWindowTitle(title)
+    msg_box.setText(str(text))
+    msg_box.setIcon(icon)
+    ok_button = msg_box.addButton(button_text, QMessageBox.AcceptRole)
+    apply_dialog_style(msg_box)
+    ok_button.setStyleSheet(CHANPINGUANLI_BUTTON_QSS)
+    msg_box.exec_()
+
+
+def defer_styled_warning(parent, title, text, button_text="确认"):
+    """
+    延迟弹出警告：先置 pending，供 Enter 导航挂起；真正弹出走 show_styled_warning。
+    """
+    if parent is not None:
+        parent._pipe_warning_pending = True
+    QTimer.singleShot(0, lambda: show_styled_warning(parent, title, text, button_text))
+
+
+def _settle_pipe_enter_nav_after_warning(host):
+    """警告弹窗全部关闭后，结算挂起的 Enter 跳行意图。"""
+    if host is None:
+        return
+    if getattr(host, "_pipe_warning_dialog_depth", 0) > 0:
+        return
+    if getattr(host, "_pipe_warning_pending", False):
+        return
+    settler = getattr(host, "_pipe_enter_nav_settler", None)
+    if callable(settler):
+        settler()
+
+
+def show_styled_warning(parent, title, text, button_text="确认"):
+    """
+    警告弹窗（带 Enter 跳行门闩）：样式同 show_styled_message，图标为 Warning。
+    """
+    host = parent
+    if host is not None:
+        host._pipe_warning_pending = False
+        host._pipe_warning_dialog_depth = getattr(host, "_pipe_warning_dialog_depth", 0) + 1
+
+    try:
+        show_styled_message(
+            parent, title, text, icon=QMessageBox.Warning, button_text=button_text
+        )
+    finally:
+        if host is not None:
+            depth = max(0, getattr(host, "_pipe_warning_dialog_depth", 1) - 1)
+            host._pipe_warning_dialog_depth = depth
+            if depth == 0:
+                _settle_pipe_enter_nav_after_warning(host)
+
 
 # —— 运行期隐藏ID映射 + 待删ID 集合 ——
 def ensure_hidden_maps(stats_widget):
@@ -278,6 +361,27 @@ def get_pipe_special_columns(is_container):
     }
 
 
+def set_pipe_load_column_readonly(stats_widget):
+    """
+    管口载荷列始终不可单元格内联编辑（仅单击弹窗）。
+    对整表该列去掉 ItemIsEditable。
+    """
+    table = getattr(stats_widget, "tableWidget_pipe", None)
+    if table is None:
+        return
+    is_container = getattr(stats_widget, "is_container_product", False)
+    load_col = get_pipe_special_columns(is_container).get("load")
+    if load_col is None:
+        return
+    for row in range(table.rowCount()):
+        item = table.item(row, load_col)
+        if item is None:
+            item = QTableWidgetItem("")
+            item.setTextAlignment(Qt.AlignCenter)
+            table.setItem(row, load_col, item)
+        item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+
+
 def get_pipe_sort_string_columns(is_container):
     """含「程序推荐」等文本的列 → 纯字符串排序"""
     fields = ["焊端规格", "轴向定位距离", "外伸高度", "内伸高度"]
@@ -426,6 +530,7 @@ def read_pipe_temp(stats_widget, belong_type, belong_version, product_id):
         check_last_row_and_add_new(stats_widget)
         stats_widget.adjust_pipe_column_width()
         set_pipe_function_column_readonly(stats_widget)
+        set_pipe_load_column_readonly(stats_widget)
         try:
             from modules.guankoudingyi.funcs.funcs_pipe_comboBox_value import \
                 apply_pipe_row_column_locks_by_belong
@@ -562,7 +667,7 @@ def show_pending_duplicate_function_warning(stats_widget):
 
     stats_widget._duplicate_function_warning_shown = True
     codes_str = ",".join(codes)
-    QMessageBox.warning(
+    show_styled_warning(
         stats_widget,
         "提示",
         f"管口功能重复，请重新输入{codes_str}的管口功能",
@@ -677,7 +782,7 @@ def delete_selected_pipe_rows(stats_widget, product_id):
         if protected_pipe_functions:
             # 格式化提示信息，根据管口功能生成提示
             function_names = "、".join(set(protected_pipe_functions))  # 使用set去重
-            QMessageBox.warning(
+            show_styled_warning(
                 stats_widget,
                 "删除失败",
                 f"该管口功能为{function_names}，不可删除，您可更改其管口代号和移动其管口顺序。"
@@ -686,12 +791,12 @@ def delete_selected_pipe_rows(stats_widget, product_id):
             #stats_widget.line_tip.setStyleSheet("color: red;")
             return
 
-    # 确认删除
-    reply = QMessageBox.question(
-        stats_widget, "确认删除", f"确定要删除选中的 {len(selected_rows)} 行管口数据吗？",
-        QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-    )
-    if reply != QMessageBox.Yes:
+    # 确认删除（项目管理确认/取消按钮样式）
+    if not show_styled_confirm(
+        stats_widget,
+        "确认删除",
+        f"确定要删除选中的 {len(selected_rows)} 行管口数据吗？",
+    ):
         return
 
     for row in selected_rows:
@@ -742,11 +847,11 @@ def delete_selected_attachment_rows(stats_widget, product_id):
             stats_widget.line_tip.setStyleSheet("color: red;")
         return
 
-    reply = QMessageBox.question(
-        stats_widget, "确认删除", f"确定要删除选中的 {len(selected_rows)} 行附件数据吗？",
-        QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-    )
-    if reply != QMessageBox.Yes:
+    if not show_styled_confirm(
+        stats_widget,
+        "确认删除",
+        f"确定要删除选中的 {len(selected_rows)} 行附件数据吗？",
+    ):
         return
 
     for row in selected_rows:
@@ -1076,7 +1181,8 @@ def check_last_attachment_row_and_add_new(stats_widget):
 """控制最后一行其他列的编辑状态"""
 def control_last_row_editable_state(stats_widget, enable_editing=True):
     """
-    控制最后一行除管口代号外其他列的可编辑状态
+    控制最后一行除管口代号外其他列的可编辑状态。
+    管口载荷列始终不可内联编辑（仅单击弹窗），解冻时也会保持只读。
     :param stats_widget: 主窗口实例
     :param enable_editing: True为解冻（可编辑），False为冻结（不可编辑）
     """
@@ -1090,6 +1196,9 @@ def control_last_row_editable_state(stats_widget, enable_editing=True):
     last_port_code_item = table.item(last_row, 1)
     if not last_port_code_item:
         return
+
+    is_container = getattr(stats_widget, "is_container_product", False)
+    load_col = get_pipe_special_columns(is_container).get("load")
     
     print(f"[DEBUG] 最后一行管口代号: '{last_port_code_item.text()}'")
     
@@ -1097,6 +1206,10 @@ def control_last_row_editable_state(stats_widget, enable_editing=True):
     for col in range(2, table.columnCount()):  # 从第2列开始（跳过序号和管口代号）
         item = table.item(last_row, col)
         if item:
+            # 管口载荷：始终只读（可选中），不参与解冻
+            if load_col is not None and col == load_col:
+                item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+                continue
             if enable_editing:
                 # 解冻：恢复可编辑状态
                 old_flags = item.flags()
@@ -1240,6 +1353,9 @@ def copy_pipe_data(stats_widget, product_id):
     button_layout.addWidget(cancel_button)
     layout.addLayout(button_layout)
 
+    # 按钮/弹窗样式与项目管理 ui_style 一致（先看复制对话框效果）
+    apply_chanpinguanli_dialog_style(dialog)
+
     # 显示对话框
     if dialog.exec_() == QDialog.Accepted:
         selected_items = list_widget.selectedItems()
@@ -1311,6 +1427,9 @@ def copy_pipe_row_data(stats_widget, source_row: int, product_id):
                 if col_idx == 1:  # 管口代号列
                     new_item.setText(new_code)
                     new_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEditable | Qt.ItemIsEnabled)
+                elif field_name == "管口载荷":
+                    # 载荷列仅弹窗，不可内联编辑
+                    new_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
                 else:
                     # 其他列保持原数据（或置空），但设为可编辑
                     new_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEditable | Qt.ItemIsEnabled)
@@ -1330,6 +1449,7 @@ def copy_pipe_row_data(stats_widget, source_row: int, product_id):
 
     # 设置管口功能列只读状态
     set_pipe_function_column_readonly(stats_widget)
+    set_pipe_load_column_readonly(stats_widget)
 
     # 提示复制成功
     stats_widget.line_tip.setText(f"已复制管口数据到新行，新管口代号：{new_code}")
@@ -1565,6 +1685,8 @@ def copy_attachment_data(stats_widget, product_id):
     button_layout.addWidget(cancel_button)
     layout.addLayout(button_layout)
 
+    apply_chanpinguanli_dialog_style(dialog)
+
     if dialog.exec_() != QDialog.Accepted:
         return
 
@@ -1622,6 +1744,8 @@ def copy_attachment_row_data(stats_widget, source_row: int, product_id):
                 text = new_element_name
             elif col in (2, 3):
                 text = src.text() if src else ""
+            else:
+                text = ""
 
             new_item = QTableWidgetItem(text)
             new_item.setTextAlignment(Qt.AlignCenter)

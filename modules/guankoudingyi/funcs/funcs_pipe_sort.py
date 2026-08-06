@@ -6,6 +6,7 @@ from fractions import Fraction
 
 from modules.guankoudingyi.funcs.funcs_pipe_table import (
     set_pipe_function_column_readonly,
+    set_pipe_load_column_readonly,
     get_pipe_sort_string_columns,
     get_pipe_sort_numeric_columns,
     get_pipe_position_hide_columns,
@@ -349,6 +350,7 @@ def sort_table_column(stats_widget, col, ascending=True):
         table.blockSignals(False)
 
     set_pipe_function_column_readonly(stats_widget)
+    set_pipe_load_column_readonly(stats_widget)
 
 
 # 隐藏列功能

@@ -6,6 +6,7 @@ from PyQt5.QtGui import QFont, QPixmap, QDoubleValidator, QColor, QBrush
 import os
 import re
 from modules.guankoudingyi.db_cnt import get_connection, db_config_1, db_config_2
+from modules.guankoudingyi.funcs.funcs_pipe_table import show_styled_message
 
 
 class NoWheelComboBox(QComboBox):
@@ -157,7 +158,7 @@ def get_load_image_path_by_calc_type(calc_type):
         if result and result.get("载荷示意图"):
             image_path = result["载荷示意图"].replace("\\", os.sep).strip()
             # 从路径中提取文件名（处理 openload_img\WRC537_2.png 格式）
-            # 数据库中可能存储 openload_img\WRC537_2.png，实际文件夹是 openingload_img
+            # 数据库中可能存储 openload_img\WRC537_2.png，实际文件夹是 openload_img
             filename = os.path.basename(image_path)
             return filename
         return None
@@ -199,7 +200,7 @@ def get_load_calc_image_path_by_calc_type(calc_type):
         if result and result.get("载荷计算图"):
             image_path = result["载荷计算图"].replace("\\", os.sep).strip()
             # 从路径中提取文件名（处理 openload_img\WRC537_2.png 格式）
-            # 数据库中可能存储 openload_img\WRC537_2.png，实际文件夹是 openingload_img
+            # 数据库中可能存储 openload_img\WRC537_2.png，实际文件夹是 openload_img
             filename = os.path.basename(image_path)
             return filename
         return None
@@ -240,11 +241,11 @@ def display_load_image(dialog, calc_type):
                 return
             
             # 构建完整图片路径
-            # 图片文件夹在 modules/guankoudingyi/openingload_img/ 目录下
+            # 图片文件夹在 modules/guankoudingyi/openload_img/ 目录下
             # 获取当前文件所在目录（funcs），然后回到 guankoudingyi 目录
             current_file_dir = os.path.dirname(os.path.abspath(__file__))  # funcs目录
             guankoudingyi_dir = os.path.dirname(current_file_dir)  # guankoudingyi目录
-            openingload_img_dir = os.path.join(guankoudingyi_dir, "openingload_img")
+            openingload_img_dir = os.path.join(guankoudingyi_dir, "openload_img")
             image_path = os.path.join(openingload_img_dir, filename)
             
             # 统一路径分隔符
@@ -340,11 +341,11 @@ def display_load_calc_image(dialog, calc_type, retry_count=0):
                 return
             
             # 构建完整图片路径
-            # 图片文件夹在 modules/guankoudingyi/openingload_img/ 目录下
+            # 图片文件夹在 modules/guankoudingyi/openload_img/ 目录下
             # 获取当前文件所在目录（funcs），然后回到 guankoudingyi 目录
             current_file_dir = os.path.dirname(os.path.abspath(__file__))  # funcs目录
             guankoudingyi_dir = os.path.dirname(current_file_dir)  # guankoudingyi目录
-            openingload_img_dir = os.path.join(guankoudingyi_dir, "openingload_img")
+            openingload_img_dir = os.path.join(guankoudingyi_dir, "openload_img")
             image_path = os.path.join(openingload_img_dir, filename)
             
             # 统一路径分隔符
@@ -1272,7 +1273,7 @@ def save_second_tab_load_params_to_db(dialog: QDialog, product_id: int, pipe_id:
         conn.commit()
 
         print(f"[保存第二个tab页载荷参数] 成功保存 {len(payloads)} 条参数: 产品ID={product_id}, 管口ID={pipe_id}")
-        QMessageBox.information(dialog, "提示", "保存成功！", QMessageBox.Ok)
+        show_styled_message(dialog, "提示", "保存成功！", icon=QMessageBox.Information)
 
     except Exception as e:
         print(f"[ERROR] 保存第二个tab页载荷参数失败: {e}")
@@ -1608,6 +1609,24 @@ def setup_second_tab_table(dialog: QDialog):
     # 不设置最大宽度，允许水平扩展；高度固定为当前行数对应高度
     table.setMaximumSize(16777215, total_height)  # 16777215是Qt的最大整数值
 
+    # 单击即可编辑第二列可编辑单元格（夹角等锁定格仍不可编；不改动下拉）
+    def on_zaihecanshu_cell_clicked(clicked_row, clicked_col):
+        if clicked_col != 1:
+            return
+        target_item = table.item(clicked_row, clicked_col)
+        if target_item is None:
+            return
+        if not (target_item.flags() & Qt.ItemIsEditable):
+            return
+        table.editItem(target_item)
+
+    try:
+        table.cellClicked.disconnect(table._zaihecanshu_click_handler)
+    except Exception:
+        pass
+    table._zaihecanshu_click_handler = on_zaihecanshu_cell_clicked
+    table.cellClicked.connect(table._zaihecanshu_click_handler)
+
 
 
 """初始化管口载荷弹窗"""
@@ -1720,10 +1739,12 @@ def init_pipe_openingload_dialog(dialog: QDialog, pipe_code: str = None, product
     default_value = "柱壳上圆形附件或接管计算(WRC 537)"
     dialog._last_calc_type_value = default_value
 
-    # 连接单元格点击信号，实现单击即可显示下拉框
+    # 连接单元格点击信号：局部应力符号单击编辑；计算类型单击展开下拉
     def on_cell_clicked(row, column):
-        """处理单元格点击事件，第二行第二列单击时立即进入编辑模式"""
-        if row == 1 and column == 1:
+        """处理单元格点击事件：可编辑文本格单击进入编辑；下拉格单击展开"""
+        if column != 1:
+            return
+        if row == 1:
             # 确保item存在
             target_item = table.item(1, 1)
             if target_item is None:
@@ -1735,6 +1756,14 @@ def init_pipe_openingload_dialog(dialog: QDialog, pipe_code: str = None, product
                 # 如果item存在但为空，设置默认值
                 target_item.setText(default_value)
             # 立即进入编辑模式，显示下拉框
+            table.editItem(target_item)
+        elif row == 0:
+            # 局部应力符号：仅可编辑时单击进入输入
+            target_item = table.item(0, 1)
+            if target_item is None:
+                return
+            if not (target_item.flags() & Qt.ItemIsEditable):
+                return
             table.editItem(target_item)
 
     table.cellClicked.connect(on_cell_clicked)
