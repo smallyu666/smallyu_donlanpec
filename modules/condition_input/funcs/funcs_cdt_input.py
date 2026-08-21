@@ -1767,7 +1767,6 @@ def render_grouped_table(table_widget, grouped_data, headers, group_key_column=0
                     side = "壳程" if "壳程" in key else "管程"
                     ratio = str(row.get(f"{side}_检测比例", "")).strip()
                     field_type = "技术等级" if "技术等级" in key else "合格级别"
-                    from .funcs_cdt_input import compute_trail_default_grade
                     default_val = compute_trail_default_grade(detect_method, ratio, field_type)
                     if default_val:
                         item.setData(Qt.UserRole + 2, default_val)
@@ -1841,10 +1840,18 @@ def _format_coating_usage_display(usage: str) -> str:
     return s
 
 
-def _format_design_param_name_display(name: str) -> str:
+def is_container_viewer(viewer) -> bool:
+    if viewer is None:
+        return False
+    product_type = getattr(viewer, "product_type", "") or ""
+    return "容器" in product_type
+
+
+def _format_design_param_name_display(name: str, viewer=None) -> str:
     """
     设计数据参数名称显示：隔板两侧压力差值* 从括号起换行；其余原样。
     库内仍存单行 canonical 名（放 UserRole）。
+    viewer 参数保留兼容调用方，当前不参与显示逻辑。
     例：隔板两侧压力差值*（可取…）→ 隔板两侧压力差值*\\n（可取…）
     """
     s = normalize_param_name(name)
@@ -2560,13 +2567,6 @@ def find_trail_column_by_field(table_widget: QTableWidget, field_name: str):
         if resolve_header_field_name(table_widget, col) == field_name:
             return col
     return None
-
-
-def is_container_viewer(viewer) -> bool:
-    if viewer is None:
-        return False
-    product_type = getattr(viewer, "product_type", "") or ""
-    return "容器" in product_type
 
 
 def get_header_column_map(table_widget):
@@ -3676,7 +3676,7 @@ def validate_required_fields(table_widget, mode="设计数据"):
             continue
         name_text = param_name_from_item(name_item)
 
-        # ✅ 常规：带 * 的参数检查 修改！！！！
+        # ✅ 常规：带 * 的参数检查
         if "*" in name_text:
             # 特殊项：隔板两侧压力差值* / 旧名进、出口压力差* 只检查管程数值
             if is_baffle_side_pressure_diff_starred(name_text):
@@ -3809,8 +3809,10 @@ def validate_design_table_cell(param_name: str, column_name: str, value: str, li
 
         # ✅ 通用规则（基础类型/范围检查）
         base_rules = {
-            ("介质密度", "壳程数值"): ("float", (0, 1e10), "介质密度的参数值不能为负，请核对后输入"),
-            ("介质密度", "管程数值"): ("float", (0, 1e10), "介质密度的参数值不能为负，请核对后输入"),
+            ("介质密度", "壳程数值"): ("float", (0, None), "介质密度的参数值不能为负，请核对后输入"),
+            ("介质密度", "管程数值"): ("float", (0, None), "介质密度的参数值不能为负，请核对后输入"),
+            ("介质密度*", "壳程数值"): ("float", (0, None), "介质密度的参数值不能为负，请核对后输入"),
+            ("介质密度*", "管程数值"): ("float", (0, None), "介质密度的参数值不能为负，请核对后输入"),
             ("介质入口流速", "壳程数值"): ("float", (0, 1e10), "介质入口流速的参数值不能为负，请核对后输入"),
             ("介质入口流速", "管程数值"): ("float", (0, 1e10), "介质入口流速的参数值不能为负，请核对后输入"),
             ("液柱静压力", "壳程数值"): ("float", (0, 1e10), "液柱静压力的参数值不能为负，请核对后输入"),
@@ -4171,6 +4173,7 @@ def dispatch_cell_validation(viewer, table, row, col, param_name, column_name, v
         except Exception:
             pass
 
+        param_name_for_validation = normalize_param_name(param_name_for_validation)
         column_name_for_validation = normalize_design_column_name(column_name_for_validation)
 
         result = validate_design_table_cell(
@@ -4210,7 +4213,6 @@ def dispatch_cell_validation(viewer, table, row, col, param_name, column_name, v
         item = table.item(row, col)
         if item:
             try:
-                from modules.condition_input.funcs.funcs_cdt_input import compute_trail_default_grade, resolve_header_field_name
                 if column_name.endswith("技术等级") or column_name.endswith("合格级别"):
                     side = "壳程" if "壳程" in column_name else "管程"
                     field_type = "技术等级" if column_name.endswith("技术等级") else "合格级别"
@@ -4421,8 +4423,9 @@ def fill_table_widget_export(table_widget, headers, rows, index_header=None):
             is_unit_column = key == "参数单位"
             # 0522新修改-ui修改
             if key == "参数名称":
+                viewer = getattr(table_widget, "viewer", None)
                 canonical = normalize_param_name(value)
-                display = _format_design_param_name_display(canonical)
+                display = _format_design_param_name_display(canonical, viewer=viewer)
                 item.setText(display)
                 item.setData(Qt.UserRole, canonical)
                 item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -4467,6 +4470,19 @@ def hydrate_stub_viewer_for_local_xlsx(stub, product_id) -> bool:
         return False
 
     data = result["数据"]
+    product_type = _get_product_type_for_product_id(product_id)
+    stub.product_type = product_type or ""
+    for _tw_name in (
+        "tableWidget_product_std",
+        "tableWidget_design_data",
+        "tableWidget_general_data",
+        "tableWidget_trail_data",
+        "tableWidget_coating_data",
+    ):
+        _tw = getattr(stub, _tw_name, None)
+        if _tw is not None:
+            _tw.viewer = stub
+
     fill_table_widget_export(
         stub.tableWidget_product_std,
         data["产品标准"]["headers"],
@@ -4487,7 +4503,6 @@ def hydrate_stub_viewer_for_local_xlsx(stub, product_id) -> bool:
     )
     capture_default_order(stub.tableWidget_design_data)
 
-    product_type = _get_product_type_for_product_id(product_id)
     is_container = "容器" in (product_type or "")
     if is_container:
         setup_container_trail_qheader(stub.tableWidget_trail_data)
@@ -4590,6 +4605,7 @@ def update_design_data_table_from_excel(excel_path: str, table_widget):
         name_col = header_map.get("参数名称", 1)
 
         # Excel 中构建映射表（左栏：名称→数值；容器仅第4列有值）
+        # 兼容旧 Excel「介质密度」与新容器「介质密度*」互导
         data_map = {}
         for _, row in df.iterrows():
             pname = str(row.iloc[1]).strip() if len(row) > 1 else ""
@@ -4597,7 +4613,12 @@ def update_design_data_table_from_excel(excel_path: str, table_widget):
                 continue
             shell_val = str(row.iloc[3]).strip() if len(row) > 3 else ""
             tube_val = str(row.iloc[4]).strip() if len(row) > 4 else ""
-            data_map[pname] = (shell_val, tube_val)
+            vals = (shell_val, tube_val)
+            data_map[pname] = vals
+            if pname == "介质密度":
+                data_map.setdefault("介质密度*", vals)
+            elif pname == "介质密度*":
+                data_map.setdefault("介质密度", vals)
 
         # ✅ 获取界面当前的“绝热类型”值
         insulation_type_shell = ""
@@ -4622,11 +4643,15 @@ def update_design_data_table_from_excel(excel_path: str, table_widget):
             if not name_item:
                 continue
 
-            name = name_item.text().strip()
-            if name not in data_map:
+            name = param_name_from_item(name_item)
+            name_display = (name_item.text() or "").replace("\n", "").strip()
+            if name in data_map:
+                shell_val, tube_val = data_map[name]
+            elif name_display in data_map:
+                shell_val, tube_val = data_map[name_display]
+                name = name_display
+            else:
                 continue
-
-            shell_val, tube_val = data_map[name]
 
             if name in {"绝热材料", "绝热层厚度", "绝热材料密度", "绝热材料厚度"}:
                 if skip_shell:
@@ -5106,7 +5131,6 @@ def _apply_trail_excel_row(table_widget, current_row, values, field_to_col, view
                 current_row, qualify_col) else ""
 
             if not tech_val and not qualify_val:
-                from .funcs_cdt_input import autofill_trail_test_grade
                 autofill_trail_test_grade(table_widget, current_row, side,
                                           getattr(table_widget, "undo_stack", None))
 
@@ -5231,7 +5255,9 @@ def validate_all_tables_after_import(viewer: QWidget):
         param_item = table.item(row, header_map.get("参数名称", 1))
         if not param_item or not param_item.text():
             continue
-        param_name = param_item.text().strip()
+        # 库内/界面参数名原样参与校验（容器为「介质密度*」，换热器为「介质密度」）
+        param_name = param_name_from_item(param_item)
+        param_name_display = (param_item.text() or "").replace("\n", "").strip() or param_name
 
         for col_index, col_name in value_columns:
             cell_item = table.item(row, col_index)
@@ -5239,20 +5265,20 @@ def validate_all_tables_after_import(viewer: QWidget):
                 continue
             val = cell_item.text().strip()
 
-            conf = design_dropdown_config.get(param_name)
+            conf = design_dropdown_config.get(param_name) or design_dropdown_config.get(param_name_display)
             if conf and not conf.get("editable", False):
                 allowed = conf.get("options", [])
                 if val not in allowed:
                     cell_item.setText("")
-                    tip_list.append(f"[设计数据] {param_name} - {col_name}: ❌ 非法下拉值“{val}”，已清空")
+                    tip_list.append(f"[设计数据] {param_name_display} - {col_name}: ❌ 非法下拉值“{val}”，已清空")
                     continue
 
             result = validate_design_table_cell(param_name, col_name, val, QTableWidgetItem(), table, col_index)
             if result == "error":
                 cell_item.setText("")
-                tip_list.append(f"[设计数据] {param_name} - {col_name}: ❌ 非法值，已清空")
+                tip_list.append(f"[设计数据] {param_name_display} - {col_name}: ❌ 非法值，已清空")
             elif result == "warn":
-                tip_list.append(f"[设计数据] {param_name} - {col_name}: ⚠️ 可疑值")
+                tip_list.append(f"[设计数据] {param_name_display} - {col_name}: ⚠️ 可疑值")
 
             # 原可填范围表校验通过后，导入时同样按产品型式做公称直径标准范围询问（如 AEM 导入 6500）
             if result != "error" and param_name == "公称直径*" and col_name in ("壳程数值", "管程数值"):
@@ -6933,9 +6959,6 @@ class TrailTableComboDelegate(QStyledItemDelegate):
         if viewer:
             row = index.row()
             column_name = resolve_header_field_name(table, col)
-            from modules.condition_input.funcs.funcs_cdt_input import dispatch_cell_validation, \
-                handle_cross_table_triggers
-
             dispatch_cell_validation(viewer, table, row, col, "", column_name, new_val)
             QTimer.singleShot(0, lambda: handle_cross_table_triggers(viewer, table, row, col))
 
@@ -6985,7 +7008,6 @@ class TrailTableComboDelegate(QStyledItemDelegate):
             if viewer:
                 header_item = table.horizontalHeaderItem(col)
                 column_name = header_item.text().strip() if header_item else ""
-                from .funcs_cdt_input import dispatch_cell_validation, handle_cross_table_triggers
                 dispatch_cell_validation(viewer, table, row, col, "", column_name, "")
                 QTimer.singleShot(0, lambda: handle_cross_table_triggers(viewer, table, row, col))
 

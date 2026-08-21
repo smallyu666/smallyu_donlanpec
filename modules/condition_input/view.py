@@ -200,6 +200,20 @@ class DesignConditionInputViewer(QWidget):
         self.btn_inputrefdata.clicked.connect(self.on_input_ref_data_clicked)
         self.btn_confirm.clicked.connect(lambda: self.check_and_save_data(force=True))
         self.btn_output.clicked.connect(self.export_condition_file)
+
+        # 必须在 import_condition_data（内部会 on_mode_changed 重排）之前挂上 viewer，
+        # 供校验/联动等逻辑读取 product_type。
+        for _tw_name in (
+            "tableWidget_design_data",
+            "tableWidget_general_data",
+            "tableWidget_product_std",
+            "tableWidget_trail_data",
+            "tableWidget_coating_data",
+        ):
+            _tw = getattr(self, _tw_name, None)
+            if _tw is not None:
+                _tw.viewer = self
+
         self.import_condition_data(self.product_id)
 
         tables = [
@@ -853,7 +867,7 @@ class DesignConditionInputViewer(QWidget):
                 if key == "参数名称":
                     # 隔板两侧压力差值：显示从括号换行；UserRole 存库内单行名
                     canonical = normalize_param_name(value)
-                    display = _format_design_param_name_display(canonical)
+                    display = _format_design_param_name_display(canonical, viewer=self)
                     item.setText(display)
                     item.setData(Qt.UserRole, canonical)
                     item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
