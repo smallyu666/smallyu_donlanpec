@@ -1722,6 +1722,54 @@ def _resolve_product_folder_abs_for_definition(product_id, row: int) -> str:
         return ""
 
 
+def _overwrite_container_local_templates(product_folder_abs: str, product_type: str) -> tuple:
+    """
+    容器首次定义：用容器专属模板覆盖新建时的换热器默认本地文件。
+    返回 (ok: bool, message: str)。占用或复制失败时 ok=False，调用方应阻断写库。
+    """
+    from modules.chanpinguanli import local_product_folder as lpf
+    from modules.condition_input.funcs.funcs_cdt_input import is_file_locked
+
+    if not product_folder_abs or not os.path.isdir(product_folder_abs):
+        return False, f"产品本地文件夹不存在，无法切换容器模板：\n{product_folder_abs or '(空路径)'}"
+
+    condition_template = lpf._condition_template_path(product_type)
+    nozzle_template = lpf._nozzle_template_path(product_type)
+    target_xlsx_path = os.path.join(product_folder_abs, "条件输入数据表.xlsx")
+    target_nozzle_path = os.path.join(product_folder_abs, lpf._NOZZLE_REQUIRED_FILE)
+
+    if not os.path.isfile(condition_template):
+        return False, f"缺少程序内容器条件输入模板：\n{condition_template}"
+    if not os.path.isfile(nozzle_template):
+        return False, f"缺少程序内容器管口导入模板：\n{nozzle_template}"
+
+    locked = []
+    for path in (target_xlsx_path, target_nozzle_path):
+        if os.path.isfile(path) and is_file_locked(path):
+            locked.append(path)
+    if locked:
+        detail = "\n".join(p for p in locked)
+        return False, (
+            "以下本地模板文件正在被占用，无法切换为容器模板：\n"
+            f"{detail}\n\n"
+            "请先关闭上述本地文件，再保存产品定义。"
+        )
+
+    try:
+        shutil.copy(condition_template, target_xlsx_path)
+        print(f"[confirm_product_definition] 已用容器条件模板覆盖: {target_xlsx_path}")
+        shutil.copy(nozzle_template, target_nozzle_path)
+        print(f"[confirm_product_definition] 已用容器管口模板覆盖: {target_nozzle_path}")
+    except Exception as e_copy:
+        print(f"[confirm_product_definition] 覆盖容器本地模板失败: {e_copy}")
+        return False, (
+            "覆盖容器本地模板失败（文件可能被占用或无写入权限）：\n"
+            f"{e_copy}\n\n"
+            "请先关闭上述本地文件，再保存产品定义。"
+        )
+    return True, ""
+
+
 def confirm_product_definition():
     """产品定义区域 - 确认保存（仅首次保存弹窗并锁死 类型/形式；之后保存不再弹窗）"""
     # 1) 基本校验
@@ -1801,6 +1849,18 @@ def confirm_product_definition():
             print("用户取消保存操作")
             return False
 
+    # 容器首次定义：在写库前先覆盖本地模板；文件占用则阻断，避免库已是容器、本地仍是换热器模板
+    row = bianl.product_table.currentRow()
+    product_folder_abs = _resolve_product_folder_abs_for_definition(bianl.product_id, row)
+    if is_first_time:
+        from modules.chanpinguanli import local_product_folder as lpf
+
+        if lpf._is_container_product_type(product_type):
+            ok_tpl, msg_tpl = _overwrite_container_local_templates(product_folder_abs, product_type)
+            if not ok_tpl:
+                QMessageBox.warning(bianl.main_window, "无法保存产品定义", msg_tpl)
+                return False
+
     conn = cursor = None  # 产品库（写 产品需求表）
     conn2 = cursor2 = None  # 活动库（写 产品设计活动表）
     try:
@@ -1838,10 +1898,6 @@ def confirm_product_definition():
         # =========================
         conn2 = common_usage.get_mysql_connection_active()
         cursor2 = conn2.cursor()
-
-        # 方案 A：优先使用活动表已有且存在的路径，否则按表格规则计算
-        row = bianl.product_table.currentRow()
-        product_folder_abs = _resolve_product_folder_abs_for_definition(bianl.product_id, row)
 
         upsert_sql = """
             INSERT INTO 产品设计活动表
@@ -1883,33 +1939,6 @@ def confirm_product_definition():
         print(f"第 {row} 行定义状态已更新: view（保存成功）")
 
         if is_first_time:
-            # 容器类型：首次定义保存时用容器专属模板覆盖新建时的默认本地文件
-            from modules.chanpinguanli import local_product_folder as lpf
-
-            if (
-                lpf._is_container_product_type(product_type)
-                and product_folder_abs
-                and os.path.exists(product_folder_abs)
-            ):
-                try:
-                    condition_template = lpf._condition_template_path(product_type)
-                    target_xlsx_path = os.path.join(product_folder_abs, "条件输入数据表.xlsx")
-                    if os.path.exists(condition_template):
-                        shutil.copy(condition_template, target_xlsx_path)
-                        print(f"[confirm_product_definition] 已用容器条件模板覆盖: {target_xlsx_path}")
-                    else:
-                        print(f"[confirm_product_definition] 未找到容器条件模板: {condition_template}")
-
-                    nozzle_template = lpf._nozzle_template_path(product_type)
-                    target_nozzle_path = os.path.join(product_folder_abs, lpf._NOZZLE_REQUIRED_FILE)
-                    if os.path.exists(nozzle_template):
-                        shutil.copy(nozzle_template, target_nozzle_path)
-                        print(f"[confirm_product_definition] 已用容器管口模板覆盖: {target_nozzle_path}")
-                    else:
-                        print(f"[confirm_product_definition] 未找到容器管口模板: {nozzle_template}")
-                except Exception as e_copy:
-                    print(f"[confirm_product_definition] 覆盖容器本地模板失败: {e_copy}")
-
             # 只有首次需要把必填项锁死（类型/形式）
             lock_combo(bianl.product_type_combo)
             lock_combo(bianl.product_form_combo)
@@ -2136,6 +2165,64 @@ def _generate_unique_folder_path(base_folder_path: str) -> str:
         index += 1
 
 
+def _should_skip_product_folder_entry(name: str) -> bool:
+    """复制产品目录时跳过 Office/WPS 打开 xlsx 时产生的 ~$ 临时锁文件。"""
+    return (name or "").startswith("~$")
+
+
+def _find_locked_product_folder_files(folder: str) -> list:
+    """返回产品目录内（不含 ~$ 临时文件）当前被占用的文件路径列表。"""
+    from modules.condition_input.funcs.funcs_cdt_input import is_file_locked
+
+    locked = []
+    if not folder or not os.path.isdir(folder):
+        return locked
+    for root, dirs, files in os.walk(folder):
+        dirs[:] = [d for d in dirs if not _should_skip_product_folder_entry(d)]
+        for fname in files:
+            if _should_skip_product_folder_entry(fname):
+                continue
+            path = os.path.join(root, fname)
+            if is_file_locked(path):
+                locked.append(os.path.normpath(path))
+    return locked
+
+
+def _copy_product_folder_for_copy(source_folder: str, target_folder: str):
+    """
+    复制产品本地目录到目标路径：跳过 ~$ 临时文件；源目录有占用则抛出 ValueError。
+    """
+    locked = _find_locked_product_folder_files(source_folder)
+    if locked:
+        detail = "\n".join(p for p in locked)
+        raise ValueError(
+            "以下本地文件正在被占用，无法复制产品：\n"
+            f"{detail}\n\n"
+            "请先关闭上述本地文件，再重试复制。"
+        )
+
+    os.makedirs(target_folder, exist_ok=True)
+    for root, dirs, files in os.walk(source_folder):
+        dirs[:] = [d for d in dirs if not _should_skip_product_folder_entry(d)]
+        rel_root = os.path.relpath(root, source_folder)
+        dest_root = target_folder if rel_root == "." else os.path.join(target_folder, rel_root)
+        os.makedirs(dest_root, exist_ok=True)
+        for fname in files:
+            if _should_skip_product_folder_entry(fname):
+                continue
+            src = os.path.join(root, fname)
+            dst = os.path.join(dest_root, fname)
+            try:
+                shutil.copy2(src, dst)
+            except OSError as e:
+                raise ValueError(
+                    "复制本地产品文件夹失败（文件可能被占用或无读取权限）：\n"
+                    f"{os.path.normpath(src)}\n\n"
+                    f"{e}\n\n"
+                    "请先关闭上述本地文件，再重试复制。"
+                ) from e
+
+
 def _prepare_new_product_folder(
     source_folder: str,
     target_folder: str,
@@ -2144,7 +2231,7 @@ def _prepare_new_product_folder(
 ):
     """复制或初始化产品目录，并写入新产品ID。"""
     if source_folder and os.path.isdir(source_folder):
-        shutil.copytree(source_folder, target_folder)
+        _copy_product_folder_for_copy(source_folder, target_folder)
     else:
         from modules.chanpinguanli import local_product_folder as lpf
 
@@ -2416,7 +2503,25 @@ def copy_selected_product():
         bianl.main_window.line_tip.setToolTip(f"复制成功：{new_product_name}")
         bianl.main_window.line_tip.setStyleSheet("color: black;")
         QTimer.singleShot(5000, clear_line_tip)
-    except (ValueError, MySQLError, OSError) as e:
+    except ValueError as e:
+        if conn_product:
+            conn_product.rollback()
+        if conn_active:
+            conn_active.rollback()
+        if target_folder and os.path.isdir(target_folder):
+            try:
+                shutil.rmtree(target_folder)
+            except OSError:
+                pass
+        err_msg = str(e).strip() or "未知错误"
+        project_confirm_btn.show_warning_dialog(
+            bianl.main_window, "复制产品失败", err_msg
+        )
+        bianl.main_window.line_tip.setText("复制产品失败，请先关闭本地产品文件夹中打开的文件。")
+        bianl.main_window.line_tip.setToolTip(err_msg)
+        bianl.main_window.line_tip.setStyleSheet("color: black;")
+        QTimer.singleShot(5000, clear_line_tip)
+    except (MySQLError, OSError) as e:
         if conn_product:
             conn_product.rollback()
         if conn_active:
@@ -2427,8 +2532,15 @@ def copy_selected_product():
                 shutil.rmtree(target_folder)
             except OSError:
                 pass
-        bianl.main_window.line_tip.setText(f"复制产品失败：{e}")
-        bianl.main_window.line_tip.setToolTip(f"复制产品失败：{e}")
+        err_msg = (
+            f"复制产品时发生错误：\n{e}\n\n"
+            "若本地产品文件夹中的模板文件仍打开，请先关闭后重试。"
+        )
+        project_confirm_btn.show_warning_dialog(
+            bianl.main_window, "复制产品失败", err_msg
+        )
+        bianl.main_window.line_tip.setText("复制产品失败，请查看提示详情。")
+        bianl.main_window.line_tip.setToolTip(err_msg)
         bianl.main_window.line_tip.setStyleSheet("color: black;")
         QTimer.singleShot(5000, clear_line_tip)
     finally:
