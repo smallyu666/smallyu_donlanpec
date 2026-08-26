@@ -95,6 +95,69 @@ def _required_local_files(product_type: str) -> tuple:
     files.insert(1, _NOZZLE_REQUIRED_FILE)
     return tuple(files)
 
+
+def _validate_product_local_template_install(product_folder_abs: str, product_type: str) -> tuple:
+    """
+    首次产品定义写入本地模板前的校验（不复制文件）。
+    返回 (ok: bool, message: str)。
+    """
+    from modules.condition_input.funcs.funcs_cdt_input import is_file_locked
+
+    if not product_folder_abs or not os.path.isdir(product_folder_abs):
+        return False, f"产品本地文件夹不存在，无法写入模板：\n{product_folder_abs or '(空路径)'}"
+
+    condition_template = _condition_template_path(product_type)
+    nozzle_template = _nozzle_template_path(product_type)
+    target_xlsx_path = os.path.join(product_folder_abs, "条件输入数据表.xlsx")
+    target_nozzle_path = os.path.join(product_folder_abs, _NOZZLE_REQUIRED_FILE)
+
+    if not os.path.isfile(condition_template):
+        return False, f"缺少程序内条件输入模板：\n{condition_template}"
+    if not os.path.isfile(nozzle_template):
+        return False, f"缺少程序内管口导入模板：\n{nozzle_template}"
+
+    locked = []
+    for path in (target_xlsx_path, target_nozzle_path):
+        if os.path.isfile(path) and is_file_locked(path):
+            locked.append(os.path.normpath(path))
+    if locked:
+        detail = "\n".join(locked)
+        return False, (
+            "以下本地模板文件正在被占用，无法写入模板：\n"
+            f"{detail}\n\n"
+            "请先关闭上述本地文件，再保存产品定义。"
+        )
+    return True, ""
+
+
+def install_product_local_templates(product_folder_abs: str, product_type: str) -> tuple:
+    """
+    首次产品定义保存成功后：按产品类型写入本地条件输入/管口导入模板。
+    返回 (ok: bool, message: str)。
+    """
+    ok, msg = _validate_product_local_template_install(product_folder_abs, product_type)
+    if not ok:
+        return False, msg
+
+    condition_template = _condition_template_path(product_type)
+    nozzle_template = _nozzle_template_path(product_type)
+    target_xlsx_path = os.path.join(product_folder_abs, "条件输入数据表.xlsx")
+    target_nozzle_path = os.path.join(product_folder_abs, _NOZZLE_REQUIRED_FILE)
+
+    try:
+        shutil.copy2(condition_template, target_xlsx_path)
+        print(f"[install_product_local_templates] 已写入条件输入模板: {target_xlsx_path}")
+        shutil.copy2(nozzle_template, target_nozzle_path)
+        print(f"[install_product_local_templates] 已写入管口导入模板: {target_nozzle_path}")
+    except Exception as e:
+        print(f"[install_product_local_templates] 写入失败: {e}")
+        return False, (
+            "写入本地产品模板失败（文件可能被占用或无写入权限）：\n"
+            f"{e}\n\n"
+            "请先关闭上述本地文件，再保存产品定义；或通过项目管理恢复本地文件。"
+        )
+    return True, ""
+
 # 0509新修改--产品恢复时同时恢复项目id.csv
 def _ensure_project_root_id_csv(product_id) -> str:
     """

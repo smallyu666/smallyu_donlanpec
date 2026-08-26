@@ -1722,54 +1722,6 @@ def _resolve_product_folder_abs_for_definition(product_id, row: int) -> str:
         return ""
 
 
-def _overwrite_container_local_templates(product_folder_abs: str, product_type: str) -> tuple:
-    """
-    容器首次定义：用容器专属模板覆盖新建时的换热器默认本地文件。
-    返回 (ok: bool, message: str)。占用或复制失败时 ok=False，调用方应阻断写库。
-    """
-    from modules.chanpinguanli import local_product_folder as lpf
-    from modules.condition_input.funcs.funcs_cdt_input import is_file_locked
-
-    if not product_folder_abs or not os.path.isdir(product_folder_abs):
-        return False, f"产品本地文件夹不存在，无法切换容器模板：\n{product_folder_abs or '(空路径)'}"
-
-    condition_template = lpf._condition_template_path(product_type)
-    nozzle_template = lpf._nozzle_template_path(product_type)
-    target_xlsx_path = os.path.join(product_folder_abs, "条件输入数据表.xlsx")
-    target_nozzle_path = os.path.join(product_folder_abs, lpf._NOZZLE_REQUIRED_FILE)
-
-    if not os.path.isfile(condition_template):
-        return False, f"缺少程序内容器条件输入模板：\n{condition_template}"
-    if not os.path.isfile(nozzle_template):
-        return False, f"缺少程序内容器管口导入模板：\n{nozzle_template}"
-
-    locked = []
-    for path in (target_xlsx_path, target_nozzle_path):
-        if os.path.isfile(path) and is_file_locked(path):
-            locked.append(path)
-    if locked:
-        detail = "\n".join(p for p in locked)
-        return False, (
-            "以下本地模板文件正在被占用，无法切换为容器模板：\n"
-            f"{detail}\n\n"
-            "请先关闭上述本地文件，再保存产品定义。"
-        )
-
-    try:
-        shutil.copy(condition_template, target_xlsx_path)
-        print(f"[confirm_product_definition] 已用容器条件模板覆盖: {target_xlsx_path}")
-        shutil.copy(nozzle_template, target_nozzle_path)
-        print(f"[confirm_product_definition] 已用容器管口模板覆盖: {target_nozzle_path}")
-    except Exception as e_copy:
-        print(f"[confirm_product_definition] 覆盖容器本地模板失败: {e_copy}")
-        return False, (
-            "覆盖容器本地模板失败（文件可能被占用或无写入权限）：\n"
-            f"{e_copy}\n\n"
-            "请先关闭上述本地文件，再保存产品定义。"
-        )
-    return True, ""
-
-
 def confirm_product_definition():
     """产品定义区域 - 确认保存（仅首次保存弹窗并锁死 类型/形式；之后保存不再弹窗）"""
     # 1) 基本校验
@@ -1849,17 +1801,18 @@ def confirm_product_definition():
             print("用户取消保存操作")
             return False
 
-    # 容器首次定义：在写库前先覆盖本地模板；文件占用则阻断，避免库已是容器、本地仍是换热器模板
     row = bianl.product_table.currentRow()
     product_folder_abs = _resolve_product_folder_abs_for_definition(bianl.product_id, row)
+    # 首次定义：写库前校验本地目录与模板占用，避免库已写入却无法落本地模板
     if is_first_time:
         from modules.chanpinguanli import local_product_folder as lpf
 
-        if lpf._is_container_product_type(product_type):
-            ok_tpl, msg_tpl = _overwrite_container_local_templates(product_folder_abs, product_type)
-            if not ok_tpl:
-                QMessageBox.warning(bianl.main_window, "无法保存产品定义", msg_tpl)
-                return False
+        ok_pre, msg_pre = lpf._validate_product_local_template_install(
+            product_folder_abs, product_type
+        )
+        if not ok_pre:
+            QMessageBox.warning(bianl.main_window, "无法保存产品定义", msg_pre)
+            return False
 
     conn = cursor = None  # 产品库（写 产品需求表）
     conn2 = cursor2 = None  # 活动库（写 产品设计活动表）
@@ -1927,6 +1880,23 @@ def confirm_product_definition():
         cursor2.execute(upsert_sql, upsert_vals)
         conn2.commit()
 
+        # 首次产品定义保存成功后：按产品类型写入本地条件输入/管口导入模板
+        template_install_note = ""
+        if is_first_time:
+            from modules.chanpinguanli import local_product_folder as lpf
+
+            ok_tpl, msg_tpl = lpf.install_product_local_templates(
+                product_folder_abs, product_type
+            )
+            if not ok_tpl:
+                project_confirm_btn.show_warning_dialog(
+                    bianl.main_window,
+                    "本地模板未写入",
+                    "产品定义已保存，但写入本地模板失败：\n"
+                    f"{msg_tpl}",
+                )
+                template_install_note = "（本地模板未写入，请关闭占用文件后通过项目管理恢复）"
+
         # =========================
         # C) 成功后：更新行状态并锁控件（仅首次）
         # =========================
@@ -1950,8 +1920,9 @@ def confirm_product_definition():
                   "isEditable:", bianl.product_form_combo.isEditable(),
                   "FocusPolicy:", bianl.product_form_combo.focusPolicy())
 
-        bianl.main_window.line_tip.setText("产品定义信息已成功保存至数据库。")
-        bianl.main_window.line_tip.setToolTip("产品定义信息已成功保存至数据库。")
+        tip = "产品定义信息已成功保存至数据库。" + template_install_note
+        bianl.main_window.line_tip.setText(tip)
+        bianl.main_window.line_tip.setToolTip(tip)
         bianl.main_window.line_tip.setStyleSheet("color: black;")
         # 5秒后自动清除提示1014
         QTimer.singleShot(5000, clear_line_tip)
@@ -2096,12 +2067,18 @@ def _table_exists(cursor, table_name: str) -> bool:
 
 
 def _bulk_copy_rows_by_product_id(cursor, table_name: str, old_product_id: str, new_product_id: str):
-    """复制指定表中同一产品ID的所有行；表不存在时直接跳过。"""
+    """
+    复制指定表中同一产品ID的所有行；表不存在时直接跳过。
+
+    自增列处理规则：
+    - 复合主键中的业务 ID（如 元件材料表.元件ID）必须原样保留，只换 产品ID。
+    - 单一自增主键（如 元件附加参数合并表.参数ID）：丢弃，由库重新生成。
+    管口附加参数 / 管口附件附加参数等无元件ID、靠产品ID区分的表，按行原样复制即可。
+    """
     if not _table_exists(cursor, table_name):
         print(f"[复制产品] 跳过不存在的表: {table_name}")
         return
 
-    # 排除自增列，避免复制时触发 PRIMARY KEY 重复
     cursor.execute(f"SHOW COLUMNS FROM `{table_name}`")
     columns_meta = cursor.fetchall() or []
     auto_increment_cols = {
@@ -2109,6 +2086,20 @@ def _bulk_copy_rows_by_product_id(cursor, table_name: str, old_product_id: str, 
         for col in columns_meta
         if "auto_increment" in str(col.get("Extra") or "").lower()
     }
+
+    cursor.execute(f"SHOW KEYS FROM `{table_name}` WHERE Key_name = 'PRIMARY'")
+    pk_cols = [
+        (k.get("Column_name") or "").strip()
+        for k in (cursor.fetchall() or [])
+        if (k.get("Column_name") or "").strip()
+    ]
+
+    # 只丢弃「单独作为主键」的自增列；复合主键中的自增业务 ID 必须原样复制
+    drop_cols = set()
+    if len(pk_cols) == 1 and pk_cols[0] in auto_increment_cols:
+        drop_cols.add(pk_cols[0])
+    elif not pk_cols:
+        drop_cols |= auto_increment_cols
 
     cursor.execute(f"SELECT * FROM `{table_name}` WHERE `产品ID` = %s", (old_product_id,))
     rows = cursor.fetchall() or []
@@ -2118,8 +2109,8 @@ def _bulk_copy_rows_by_product_id(cursor, table_name: str, old_product_id: str, 
     for row in rows:
         row_data = dict(row)
         row_data["产品ID"] = new_product_id
-        for auto_col in auto_increment_cols:
-            row_data.pop(auto_col, None)
+        for drop_col in drop_cols:
+            row_data.pop(drop_col, None)
         columns = list(row_data.keys())
         placeholders = ", ".join(["%s"] * len(columns))
         col_sql = ", ".join([f"`{col}`" for col in columns])
