@@ -579,11 +579,11 @@ def get_product_form_from_db(product_id: str) -> str:
                 # 如果是 AEM，就返回 AEM
                 print(f"    ↳ 逻辑转换: 保持为 'AEM'")
                 return 'AEM'
-            # 0515新修改-NEN(Head)产品型式
-            if raw_product_form == 'NEN(Head)':
-                # 如果是 NEN(Head)，就返回 NEN(Head)
-                print(f"    ↳ 逻辑转换: 保持为 'NEN(Head)'")
-                return 'NEN(Head)'
+            # 0515新修改-NEN(H)产品型式
+            if raw_product_form == 'NEN(H)':
+                # 如果是 NEN(H)，就返回 NEN(H)
+                print(f"    ↳ 逻辑转换: 保持为 'NEN(H)'")
+                return 'NEN(H)'
             # 0704新修改-新增容器单腔型、双腔型产品型式
             if raw_product_form in ['单腔型', '双腔型']:
                 print(f"    ↳ 逻辑转换: 保持为 '{raw_product_form}'")
