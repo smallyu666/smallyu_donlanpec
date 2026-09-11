@@ -1525,7 +1525,7 @@ def load_design_data_if_exists(product_id, product_form="all"):
                         # 2026-01: AEM或后续的产品型式需要显示（直接在数据库表里加上产品型式）
                         # 用 FIND_IN_SET 做“精确匹配”，避免 LIKE 子串误命中。
                         if product_form and product_form != "all":
-                            # FIND_IN_SET 第二个参数须为当前产品型式，才能匹配 "NEN,AEM,BEM,NEN(Head)" 这类逗号分隔值
+                            # FIND_IN_SET 第二个参数须为当前产品型式，才能匹配 "NEN,AEM,BEM,NEN(H)" 这类逗号分隔值
                             where_clauses.append(
                                 f"(`{form_column_name}` = %s OR FIND_IN_SET(%s, `{form_column_name}`) "
                                 f"OR FIND_IN_SET('all', `{form_column_name}`) OR `{form_column_name}` IS NULL OR `{form_column_name}` = '')"
@@ -4113,7 +4113,7 @@ def apply_dn_standard_range_user_prompt(viewer, table, row, col, value: str) -> 
             return True
 
         removable_for_gb151 = {"AEU", "BEU", "AES", "BES", "AKU", "BKU"}
-        non_removable_for_gb151 = {"AEM", "BEM", "NEN", "NEN(HEAD)"}
+        non_removable_for_gb151 = {"AEM", "BEM", "NEN", "NEN(H)"}
         gb150_shell_tube = removable_for_gb151 | non_removable_for_gb151
 
         if raw_form in gb150_shell_tube and dn_val < 150:
@@ -4768,7 +4768,7 @@ def import_multi_conditions_from_excel(excel_path: str, product_id: int, viewer:
             r2 = cur.fetchone() or {}
             multi_max = int(r2.get("max_id") or 0)
 
-            if product_form in ("NEN", "AEM", "BEM", "NEN(Head)", "单腔型", "双腔型"):
+            if product_form in ("NEN", "AEM", "BEM", "NEN(H)", "单腔型", "双腔型"):
                 cur.execute(
                     """
                     SELECT MAX(设计数据参数ID) AS max_id
@@ -5700,38 +5700,196 @@ def _excel_cell_value_from_text(text: str):
         return s
 
 
-def _find_nozzle_param_value_col(sheet) -> int:
-    """在表头行查找首个「管口参数值」列（1-based）；找不到则默认 F 列。"""
-    for row in range(1, min(sheet.max_row, 5) + 1):
-        for col in range(1, min(sheet.max_column, 20) + 1):
-            val = sheet.cell(row=row, column=col).value
-            if val is not None and "管口参数值" in str(val).strip():
-                return col
-    return 6
+# 0910新修改-容器管口导入模板值用com方法写入
+# 表格程序 COM ProgID：甲方环境优先 WPS，其后回退微软 Excel
+_SPREADSHEET_COM_PROG_IDS = (
+    "et.Application",     # WPS 专业版表格
+    "ket.Application",    # WPS 个人版/旧版表格
+    "Ket.Application",
+    "Excel.Application",  # Microsoft Excel 回退
+)
 
 
-def _find_nozzle_header_col(sheet, header_keyword: str, default_col: int = None) -> int:
-    """在表头行查找包含 header_keyword 的列（1-based）；找不到则返回 default_col 或 -1。"""
-    for row in range(1, min(sheet.max_row, 5) + 1):
-        for col in range(1, min(sheet.max_column, 20) + 1):
-            val = sheet.cell(row=row, column=col).value
-            if val is not None and header_keyword in str(val).strip():
+def _dispatch_spreadsheet_app(win32com_client):
+    """
+    依次尝试 WPS 表格 / Excel COM 接口，返回 (app, prog_id)。
+    均失败则返回 (None, 错误信息汇总)。
+    """
+    errors = []
+    for prog_id in _SPREADSHEET_COM_PROG_IDS:
+        try:
+            # DispatchEx 尽量独立进程，避免抢已打开的前台窗口
+            try:
+                app = win32com_client.DispatchEx(prog_id)
+            except Exception:
+                app = win32com_client.Dispatch(prog_id)
+            return app, prog_id
+        except Exception as e:
+            errors.append(f"{prog_id}: {e}")
+    return None, "; ".join(errors) if errors else "未找到可用表格程序"
+
+
+def _com_cell_text(cell) -> str:
+    try:
+        val = cell.Value
+    except Exception:
+        return ""
+    if val is None:
+        return ""
+    return str(val).strip()
+
+
+def _com_find_header_col(sheet, header_keyword: str, default_col: int = None) -> int:
+    """在表头前几行查找包含 keyword 的列（1-based）。"""
+    for row in range(1, 6):
+        for col in range(1, 21):
+            text = _com_cell_text(sheet.Cells(row, col))
+            if text and header_keyword in text:
                 return col
     return default_col if default_col is not None else -1
 
 
-def _find_sheet_row_by_info_content(sheet, info_col: int, target_text: str) -> int:
-    """按「信息内容」列查找 Excel 行号（1-based）；未找到返回 -1。"""
+def _com_sheet_max_row(sheet, fallback: int = 200) -> int:
+    try:
+        used = sheet.UsedRange
+        return int(used.Row + used.Rows.Count - 1)
+    except Exception:
+        return fallback
+
+
+def _com_find_row_by_info_content(sheet, info_col: int, target_text: str) -> int:
     if info_col < 1:
         return -1
     target = (target_text or "").strip()
-    for row in range(1, sheet.max_row + 1):
-        cell_val = sheet.cell(row=row, column=info_col).value
-        if cell_val is None:
-            continue
-        if str(cell_val).strip() == target:
+    max_row = max(_com_sheet_max_row(sheet), 80)
+    for row in range(1, max_row + 1):
+        if _com_cell_text(sheet.Cells(row, info_col)) == target:
             return row
     return -1
+
+
+def _com_configure_spreadsheet_app(app) -> None:
+    for attr, value in (
+        ("Visible", False),
+        ("DisplayAlerts", False),
+        ("AskToUpdateLinks", False),
+        ("ScreenUpdating", False),
+    ):
+        try:
+            setattr(app, attr, value)
+        except Exception:
+            pass
+
+
+def _com_open_workbook(app, abs_path: str):
+    try:
+        return app.Workbooks.Open(
+            abs_path,
+            UpdateLinks=0,
+            ReadOnly=False,
+            IgnoreReadOnlyRecommended=True,
+        )
+    except Exception:
+        return app.Workbooks.Open(abs_path)
+
+
+def _com_recalculate(app, workbook) -> None:
+    for calc_name in ("CalculateFullRebuild", "CalculateFull", "Calculate"):
+        try:
+            getattr(app, calc_name)()
+            return
+        except Exception:
+            continue
+    try:
+        workbook.Application.Calculate()
+    except Exception:
+        pass
+
+
+def _com_write_nozzle_template_dims_and_recalc(xlsx_path: str, updates: dict) -> list:
+    """
+    方案 B：全程用本机 Excel/WPS（win32com）打开模板，
+    按「信息内容」写入「管口参数值」，同一次会话内重算并保存。
+    避免 openpyxl 改存清掉公式缓存。
+    :param updates: {信息内容文本: 写入值}
+    :return: 实际写入成功的信息内容列表
+    """
+    abs_path = os.path.abspath(xlsx_path)
+    if not os.path.isfile(abs_path):
+        raise FileNotFoundError(abs_path)
+
+    try:
+        import pythoncom
+        import win32com.client
+    except ImportError as e:
+        raise RuntimeError(
+            "未安装 pywin32，无法调用 Excel/WPS 写入管口导入模板"
+        ) from e
+
+    pythoncom.CoInitialize()
+    app = None
+    workbook = None
+    try:
+        app, used_or_err = _dispatch_spreadsheet_app(win32com.client)
+        if app is None:
+            raise RuntimeError(
+                "本机未检测到可用的 Microsoft Excel 或 WPS 表格（COM）。\n"
+                f"尝试结果：{used_or_err}"
+            )
+        used_prog_id = used_or_err
+        _com_configure_spreadsheet_app(app)
+        workbook = _com_open_workbook(app, abs_path)
+        sheet = workbook.ActiveSheet
+
+        value_col = _com_find_header_col(sheet, "管口参数值", default_col=6)
+        info_col = _com_find_header_col(sheet, "信息内容")
+        if info_col < 1:
+            raise RuntimeError(f"管口导入模板中未找到「信息内容」列：\n{abs_path}")
+
+        written = []
+        for info_content, value in updates.items():
+            excel_row = _com_find_row_by_info_content(sheet, info_col, info_content)
+            if excel_row < 0:
+                print(f"[管口模板同步] 未找到信息内容「{info_content}」的行，跳过")
+                continue
+            # COM 空值写 None，避免写入字面量 "None"
+            sheet.Cells(excel_row, value_col).Value = value
+            written.append(info_content)
+
+        if not written:
+            raise RuntimeError(
+                "管口导入模板中未找到「附属元件-实际圆筒长度」/"
+                f"「附属元件-实际公称直径」对应行：\n{abs_path}"
+            )
+
+        _com_recalculate(app, workbook)
+        workbook.Save()
+        workbook.Close(SaveChanges=False)
+        workbook = None
+        print(
+            f"[管口模板同步] 已用 {used_prog_id} 写入并重算: "
+            f"{written} → 管口参数值列(col={value_col}) → {abs_path}"
+        )
+        return written
+    finally:
+        if workbook is not None:
+            try:
+                workbook.Close(SaveChanges=False)
+            except Exception:
+                pass
+        if app is not None:
+            try:
+                app.Quit()
+            except Exception:
+                pass
+            try:
+                del app
+            except Exception:
+                pass
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
 
 
 def sync_container_nozzle_template_dims(
@@ -5747,6 +5905,7 @@ def sync_container_nozzle_template_dims(
       - 附属元件-实际公称直径 ← 公称直径*
     仅容器产品调用。文件占用/写入失败时返回 False（由调用方决定是否阻断保存）。
     模板文件不存在时视为无需同步，返回 True。
+    方案 B：全程 Excel/WPS COM 写入 + 同会话重算保存（不再经 openpyxl 改存）。
     """
     if viewer is not None and not is_container_viewer(viewer):
         return True
@@ -5775,72 +5934,25 @@ def sync_container_nozzle_template_dims(
 
     dn_text = _get_container_design_shell_value(viewer, "公称直径*")
     length_text = _get_container_design_shell_value(viewer, "容器壳体长度*")
-    # 信息内容 → 写入值
     updates = {
         "附属元件-实际圆筒长度": _excel_cell_value_from_text(length_text),
         "附属元件-实际公称直径": _excel_cell_value_from_text(dn_text),
     }
 
     try:
-        wb = load_workbook(nozzle_path)
+        _com_write_nozzle_template_dims_and_recalc(nozzle_path, updates)
     except Exception as e:
-        print(f"[管口模板同步] 打开失败: {e}")
+        print(f"[管口模板同步] Excel/WPS 写入失败: {e}")
         show_warning_dialog(
             viewer,
             "同步失败",
-            f"无法打开管口导入模板：\n{nozzle_path}\n\n{e}",
+            "无法通过 Excel/WPS 同步管口导入模板尺寸。\n"
+            "请确认已安装 Microsoft Excel 或 WPS 表格，并关闭该模板文件后重试保存。\n"
+            "也可手动用 Excel/WPS 打开该模板保存一次后再导入。\n\n"
+            f"{e}",
         )
         return False
 
-    sheet = wb.active
-    value_col = _find_nozzle_param_value_col(sheet)
-    info_col = _find_nozzle_header_col(sheet, "信息内容")
-    if info_col < 1:
-        print("[管口模板同步] 未找到「信息内容」列")
-        show_warning_dialog(
-            viewer,
-            "同步失败",
-            f"管口导入模板中未找到「信息内容」列，无法同步：\n{nozzle_path}",
-        )
-        return False
-
-    written = []
-    for info_content, value in updates.items():
-        excel_row = _find_sheet_row_by_info_content(sheet, info_col, info_content)
-        if excel_row < 0:
-            print(f"[管口模板同步] 未找到信息内容「{info_content}」的行，跳过")
-            continue
-        cell = sheet.cell(row=excel_row, column=value_col)
-        if isinstance(cell, MergedCell):
-            print(f"[管口模板同步] 信息内容「{info_content}」对应单元格为合并单元格，跳过")
-            continue
-        cell.value = value
-        written.append(info_content)
-
-    if not written:
-        print("[管口模板同步] 未写入任何单元格")
-        show_warning_dialog(
-            viewer,
-            "同步失败",
-            f"管口导入模板中未找到「附属元件-实际圆筒长度」/「附属元件-实际公称直径」对应行，无法同步：\n{nozzle_path}",
-        )
-        return False
-
-    try:
-        wb.save(nozzle_path)
-    except Exception as e:
-        print(f"[管口模板同步] 保存失败: {e}")
-        show_warning_dialog(
-            viewer,
-            "同步失败",
-            f"写入管口导入模板失败：\n{nozzle_path}\n\n{e}",
-        )
-        return False
-
-    print(
-        f"[管口模板同步] 已更新信息内容 {written} → 管口参数值列(col={value_col}): "
-        f"壳体长度={length_text!r}, 公称直径={dn_text!r} → {nozzle_path}"
-    )
     return True
 
 
