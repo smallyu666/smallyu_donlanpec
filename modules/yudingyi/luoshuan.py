@@ -3,34 +3,12 @@ import pymysql
 
 import pymysql
 import json
-import os
 
 def update_user_config_for_2_6_1(product_id, json_path="modules/yudingyi/dn_pressure_table.json"):
     """同时更新远程(10.32.22.189)与本地localhost数据库；若远程连接失败，则仅更新本地。"""
-
-    # 原来：
-    # with open(json_path, "r", encoding="utf-8") as f:
-    #     dn_table = json.load(f)["data"]
-
-    #改进： 智能路径解析 - 将相对路径转换为绝对路径
-    if not os.path.isabs(json_path):
-        # 获取当前脚本所在目录
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        # 获取项目根目录（当前脚本在modules/yudingyi/目录下）
-        project_root = os.path.dirname(os.path.dirname(current_dir))
-        # 拼接绝对路径
-        json_path = os.path.join(project_root, json_path)
-    
     # 读取 JSON 压力区间数据
-    try:
-        with open(json_path, "r", encoding="utf-8") as f:
-            dn_table = json.load(f)["data"]
-    except FileNotFoundError:
-        print(f"❌ 找不到JSON文件：{json_path}")
-        return
-    except Exception as e:
-        print(f"❌ 读取JSON文件失败：{e}")
-        return
+    with open(json_path, "r", encoding="utf-8") as f:
+        dn_table = json.load(f)["data"]
 
     # 压力区间定义
     pressure_ranges = [
