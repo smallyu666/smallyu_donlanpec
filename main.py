@@ -2581,7 +2581,7 @@ if __name__ == "__main__":
     # import modules.chanpinguanli.main as cpgl_main
     from modules.buguan.buguan_ziyong.My_Piping import TubeLayoutEditor
     from modules.qiangdujisuan.jiekou_python.jisuanjiemian import JisuanResultViewer
-    from modules.yudingyi.predefined import yudingyi
+    from modules.yudingyi.predefined import ConfigLibraryWidget
     from modules.chanpinguanli.main2 import cpgl_Stats
 
     window.showMaximized()#0524新修改-初始界面最大化

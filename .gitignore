@@ -26,6 +26,7 @@ htmlcov/
 # 环境&依赖
 venv/
 env/
+.venv/
 node_modules/
 dist/
 build/
@@ -35,6 +36,27 @@ build/
 *.log
 *.tmp
 *.cache
+debug_log.txt
+logs/
+output.txt
+output_search.txt
+tab_output.txt
+
+# 编辑器备份 / 改代码时的临时副本
+*~
+*.ui~
+dynamically_adjust_ui(7).py
+dynamically_adjust_ui111.py
+dynamically_adjust_ui123.py
+main_viewnew.py
+
+# 本地分析/导出脚本与中间产物（不进仓库）
+_doc_flow_extract/
+条件输入_列宽现状与甲方确认表*.xlsx
+
+# 一次性数据库导出 / PyInstaller 规格（本地工具产物）
+**/mysql_export_*.sql
+*.spec
 
 # 超大文件（超过100MB，GitHub不允许）
 *.exe
