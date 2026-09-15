@@ -79,6 +79,8 @@ class cpgl_Stats(QtWidgets.QWidget):
 
         # 产品信息区
         bianl.product_table = self.findChild(QtWidgets.QTableWidget, "product_table")
+        from modules.chanpinguanli.predefined_column import install_predefined_column
+        install_predefined_column(bianl.product_table)
 
         # 0506新修改--项目信息非法字符约束
         # 安装自定义委托，实现实时非法字符验证
@@ -983,4 +985,3 @@ class cpgl_Stats(QtWidgets.QWidget):
 #     main.load_product_forms()
 #     main.load_product_types_design_t()
 #     sys.exit(App.exec_())
-

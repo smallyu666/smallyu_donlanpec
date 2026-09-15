@@ -721,11 +721,19 @@ class ReadOnlyComboBoxFilter(QObject):
 
 # 之前的 只设置颜色
 def set_row_editable(row: int, editable: bool):
+    from modules.chanpinguanli.predefined_column import PREDEFINED_COLUMN, refresh_predefined_row
+
     log_debug(f"[set_row_editable] 设置第 {row} 行为 {'可编辑' if editable else '不可编辑'}")
     # 获取列数
     col_count = bianl.product_table.columnCount()
     # 从第一列开始
     for col in range(1, col_count):
+        if col == PREDEFINED_COLUMN:
+            refresh_predefined_row(
+                bianl.product_table, row,
+                bianl.product_table_row_status.get(row, {}).get("product_id"),
+            )
+            continue
         # 获取当前单元格的 QTableWidgetItem 项（单元格内容 + 属性）
         item = bianl.product_table.item(row, col)
         # 如果该单元格是空的（没有任何 item），就新建一个空单元格并放入表格

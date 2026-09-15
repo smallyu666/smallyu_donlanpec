@@ -3013,15 +3013,18 @@ def refresh_product_table_row_status():
 # 复制函数
 def copy_selected_cells():
     table = bianl.product_table
-    selected_ranges = table.selectedRanges()
-    if not selected_ranges:
+    selected = table.selectedIndexes()
+    if not selected:
         return
 
     copied_data = []
-    selected_range = selected_ranges[0]  # 暂支持单选区域
-    for row in range(selected_range.topRow(), selected_range.bottomRow() + 1):
+    header = table.horizontalHeader()
+    rows = [index.row() for index in selected]
+    columns = [header.visualIndex(index.column()) for index in selected]
+    for row in range(min(rows), max(rows) + 1):
         row_data = []
-        for col in range(selected_range.leftColumn(), selected_range.rightColumn() + 1):
+        for visual_col in range(min(columns), max(columns) + 1):
+            col = header.logicalIndex(visual_col)
             item = table.item(row, col)
             row_data.append(item.text().strip() if item else "")
         copied_data.append(row_data)
@@ -3032,6 +3035,8 @@ def copy_selected_cells():
 
 # 粘贴函数
 def paste_cells_to_table():
+    from modules.chanpinguanli.predefined_column import PREDEFINED_COLUMN
+
     table = bianl.product_table
     copied = bianl.copied_cells_data
     if not copied:
@@ -3044,7 +3049,8 @@ def paste_cells_to_table():
         return
 
     start_row = table.currentRow()
-    start_col = table.currentColumn()
+    header = table.horizontalHeader()
+    start_col = header.visualIndex(table.currentColumn())
     row_count = len(copied)
     col_count = len(copied[0])
 
@@ -3074,7 +3080,9 @@ def paste_cells_to_table():
         for j in range(col_count):
             text = copied[i][j]
             target_row = start_row + i
-            target_col = start_col + j
+            target_col = header.logicalIndex(start_col + j)
+            if target_col == PREDEFINED_COLUMN:
+                continue
             item = QTableWidgetItem(text)
             # 可选中、可用，同时可编辑
             item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable)
@@ -3401,5 +3409,3 @@ def load_last_project():
 #                 print(f"[调试] 第0行, col={col}: QComboBox → 设置为深蓝色")
 #             else:
 #                 print(f"[调试] 第0行, col={col}: 没有 item 也没有 widget")
-
-
